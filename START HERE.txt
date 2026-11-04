@@ -1,0 +1,16 @@
+YouTube Transcript Tool - start here
+====================================
+
+1. Double-click  setup.bat      (one time; installs what's needed - say Y to Deno)
+2. Open  config.toml  in Notepad and set your keywords, min_views and within. Save.
+3. Double-click  run.bat        (or gui.bat for a window with buttons instead)
+
+Results go to the "output" folder:
+  output\video_list.html   - the list of videos (open in your browser)
+  output\transcripts\      - one transcript file per video
+
+Run it again any time: only new videos are downloaded.
+Just one video? Double-click  get_transcript.bat  and paste its link.
+If YouTube changes something and it stops working: double-click update.bat.
+
+Everything else (all settings, the daily schedule, troubleshooting) is in README.md.

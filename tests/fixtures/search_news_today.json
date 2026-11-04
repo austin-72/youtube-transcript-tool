@@ -1,0 +1,823 @@
+{
+ "_note": "Structure trimmed from a live YouTube search ('news', Relevance, uploaded Today) captured 2026-10-28 ~23:30 CDT; endpoint params/thumbnails removed. Includes the 'Top news' shelf (gridVideoRenderer items) that YouTube inserts into results.",
+ "contents": {
+  "twoColumnSearchResultsRenderer": {
+   "primaryContents": {
+    "sectionListRenderer": {
+     "contents": [
+      {
+       "itemSectionRenderer": {
+        "contents": [
+         {
+          "videoRenderer": {
+           "videoId": "0Wko0S-ast4",
+           "title": {
+            "runs": [
+             {
+              "text": "ABC World News Tonight with David Muir Full Broadcast - Oct. 28, 2026"
+             }
+            ]
+           },
+           "longBylineText": {
+            "runs": [
+             {
+              "text": "MF Entertainment Official",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCA6WKsz09QeFtSKNI0LIfiA",
+                "canonicalBaseUrl": "/@MF-EntertainmentYT"
+               }
+              }
+             }
+            ]
+           },
+           "publishedTimeText": {
+            "simpleText": "5h ago"
+           },
+           "lengthText": {
+            "simpleText": "21:49"
+           },
+           "viewCountText": {
+            "simpleText": "407,501 views"
+           },
+           "navigationEndpoint": {
+            "watchEndpoint": {
+             "videoId": "0Wko0S-ast4"
+            }
+           },
+           "badges": [
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_SIMPLE",
+              "label": "New"
+             }
+            }
+           ],
+           "ownerText": {
+            "runs": [
+             {
+              "text": "MF Entertainment Official",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCA6WKsz09QeFtSKNI0LIfiA",
+                "canonicalBaseUrl": "/@MF-EntertainmentYT"
+               }
+              }
+             }
+            ]
+           },
+           "shortBylineText": {
+            "runs": [
+             {
+              "text": "MF Entertainment Official",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCA6WKsz09QeFtSKNI0LIfiA",
+                "canonicalBaseUrl": "/@MF-EntertainmentYT"
+               }
+              }
+             }
+            ]
+           }
+          }
+         },
+         {
+          "shelfRenderer": {
+           "title": {
+            "simpleText": "Top news"
+           },
+           "content": {
+            "horizontalListRenderer": {
+             "items": [
+              {
+               "gridVideoRenderer": {
+                "videoId": "7tQagU2i2UE",
+                "title": {
+                 "runs": [
+                  {
+                   "text": "Top news clip one"
+                  }
+                 ]
+                },
+                "publishedTimeText": {
+                 "simpleText": "2h ago"
+                },
+                "viewCountText": {
+                 "simpleText": "52,532 views"
+                },
+                "navigationEndpoint": {
+                 "watchEndpoint": {
+                  "videoId": "7tQagU2i2UE"
+                 }
+                },
+                "shortBylineText": {
+                 "runs": [
+                  {
+                   "text": "Fox News",
+                   "navigationEndpoint": {
+                    "browseEndpoint": {
+                     "browseId": "UCXIJgqnII2ZOINSWNOGFThA",
+                     "canonicalBaseUrl": "/@FoxNews"
+                    }
+                   }
+                  }
+                 ]
+                },
+                "badges": [
+                 {
+                  "metadataBadgeRenderer": {
+                   "style": "BADGE_STYLE_TYPE_SIMPLE",
+                   "label": "New"
+                  }
+                 }
+                ],
+                "thumbnailOverlays": [
+                 {
+                  "thumbnailOverlayTimeStatusRenderer": {
+                   "text": {
+                    "simpleText": "5:38"
+                   },
+                   "style": "DEFAULT"
+                  }
+                 }
+                ]
+               }
+              },
+              {
+               "gridVideoRenderer": {
+                "videoId": "oFGWW0ioKgY",
+                "title": {
+                 "runs": [
+                  {
+                   "text": "ABC World News Tonight with David Muir Full Broadcast - Oct. 28, 2026"
+                  }
+                 ]
+                },
+                "publishedTimeText": {
+                 "simpleText": "2h ago"
+                },
+                "viewCountText": {
+                 "simpleText": "175,569 views"
+                },
+                "navigationEndpoint": {
+                 "watchEndpoint": {
+                  "videoId": "oFGWW0ioKgY"
+                 }
+                },
+                "shortBylineText": {
+                 "runs": [
+                  {
+                   "text": "ABC News",
+                   "navigationEndpoint": {
+                    "browseEndpoint": {
+                     "browseId": "UCBi2mrWuNuyYy4gbM6fU18Q",
+                     "canonicalBaseUrl": "/@ABCNews"
+                    }
+                   }
+                  }
+                 ]
+                },
+                "badges": [
+                 {
+                  "metadataBadgeRenderer": {
+                   "style": "BADGE_STYLE_TYPE_SIMPLE",
+                   "label": "New"
+                  }
+                 }
+                ]
+               }
+              }
+             ]
+            }
+           }
+          }
+         },
+         {
+          "videoRenderer": {
+           "videoId": "S8iPg96AMu0",
+           "title": {
+            "runs": [
+             {
+              "text": "NBC Nightly News with Tom Llamas Full Episode - Oct. 28"
+             }
+            ]
+           },
+           "longBylineText": {
+            "runs": [
+             {
+              "text": "NBC News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCeY0bbntWzzVIaj2z3QigXg",
+                "canonicalBaseUrl": "/@NBCNews"
+               }
+              }
+             }
+            ]
+           },
+           "publishedTimeText": {
+            "simpleText": "2h ago"
+           },
+           "lengthText": {
+            "simpleText": "21:10"
+           },
+           "viewCountText": {
+            "simpleText": "61,418 views"
+           },
+           "navigationEndpoint": {
+            "watchEndpoint": {
+             "videoId": "S8iPg96AMu0"
+            }
+           },
+           "badges": [
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_SIMPLE",
+              "label": "New"
+             }
+            },
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_MEDIA",
+              "label": "CC"
+             }
+            }
+           ],
+           "ownerText": {
+            "runs": [
+             {
+              "text": "NBC News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCeY0bbntWzzVIaj2z3QigXg",
+                "canonicalBaseUrl": "/@NBCNews"
+               }
+              }
+             }
+            ]
+           },
+           "shortBylineText": {
+            "runs": [
+             {
+              "text": "NBC News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCeY0bbntWzzVIaj2z3QigXg",
+                "canonicalBaseUrl": "/@NBCNews"
+               }
+              }
+             }
+            ]
+           }
+          }
+         },
+         {
+          "videoRenderer": {
+           "videoId": "Coa4aueiz94",
+           "title": {
+            "runs": [
+             {
+              "text": "BREAKING NEWS LIVE: Urgent Warning"
+             }
+            ]
+           },
+           "longBylineText": {
+            "runs": [
+             {
+              "text": "MIRROR NOW",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCWCEYVwSqr7Epo6sSCfUgiw",
+                "canonicalBaseUrl": "/@mirrornow"
+               }
+              }
+             }
+            ]
+           },
+           "publishedTimeText": {
+            "simpleText": "Streamed 3h ago"
+           },
+           "lengthText": {
+            "simpleText": "8:16:06"
+           },
+           "viewCountText": {
+            "simpleText": "14,479 views"
+           },
+           "navigationEndpoint": {
+            "watchEndpoint": {
+             "videoId": "Coa4aueiz94"
+            }
+           },
+           "badges": [
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_SIMPLE",
+              "label": "New"
+             }
+            }
+           ],
+           "ownerText": {
+            "runs": [
+             {
+              "text": "MIRROR NOW",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCWCEYVwSqr7Epo6sSCfUgiw",
+                "canonicalBaseUrl": "/@mirrornow"
+               }
+              }
+             }
+            ]
+           },
+           "shortBylineText": {
+            "runs": [
+             {
+              "text": "MIRROR NOW",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCWCEYVwSqr7Epo6sSCfUgiw",
+                "canonicalBaseUrl": "/@mirrornow"
+               }
+              }
+             }
+            ]
+           }
+          }
+         },
+         {
+          "videoRenderer": {
+           "videoId": "fjAfoP2LjTE",
+           "title": {
+            "runs": [
+             {
+              "text": "Feds turn up HEAT: 'THIS LOOKS SERIOUS'"
+             }
+            ]
+           },
+           "longBylineText": {
+            "runs": [
+             {
+              "text": "Fox News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCXIJgqnII2ZOINSWNOGFThA",
+                "canonicalBaseUrl": "/@FoxNews"
+               }
+              }
+             }
+            ]
+           },
+           "publishedTimeText": {
+            "simpleText": "9h ago"
+           },
+           "lengthText": {
+            "simpleText": "12:26"
+           },
+           "viewCountText": {
+            "simpleText": "467,592 views"
+           },
+           "navigationEndpoint": {
+            "watchEndpoint": {
+             "videoId": "fjAfoP2LjTE"
+            }
+           },
+           "badges": [
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_SIMPLE",
+              "label": "New"
+             }
+            }
+           ],
+           "ownerText": {
+            "runs": [
+             {
+              "text": "Fox News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCXIJgqnII2ZOINSWNOGFThA",
+                "canonicalBaseUrl": "/@FoxNews"
+               }
+              }
+             }
+            ]
+           },
+           "shortBylineText": {
+            "runs": [
+             {
+              "text": "Fox News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCXIJgqnII2ZOINSWNOGFThA",
+                "canonicalBaseUrl": "/@FoxNews"
+               }
+              }
+             }
+            ]
+           }
+          }
+         },
+         {
+          "videoRenderer": {
+           "videoId": "asEjrlZ6hqE",
+           "title": {
+            "runs": [
+             {
+              "text": "Dems 'CONCEDING': 'There may be something there'"
+             }
+            ]
+           },
+           "longBylineText": {
+            "runs": [
+             {
+              "text": "Fox News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCXIJgqnII2ZOINSWNOGFThA",
+                "canonicalBaseUrl": "/@FoxNews"
+               }
+              }
+             }
+            ]
+           },
+           "publishedTimeText": {
+            "simpleText": "12h ago"
+           },
+           "lengthText": {
+            "simpleText": "4:20"
+           },
+           "viewCountText": {
+            "simpleText": "749,479 views"
+           },
+           "navigationEndpoint": {
+            "watchEndpoint": {
+             "videoId": "asEjrlZ6hqE"
+            }
+           },
+           "badges": [
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_SIMPLE",
+              "label": "New"
+             }
+            },
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_MEDIA",
+              "label": "CC"
+             }
+            }
+           ],
+           "ownerText": {
+            "runs": [
+             {
+              "text": "Fox News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCXIJgqnII2ZOINSWNOGFThA",
+                "canonicalBaseUrl": "/@FoxNews"
+               }
+              }
+             }
+            ]
+           },
+           "shortBylineText": {
+            "runs": [
+             {
+              "text": "Fox News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCXIJgqnII2ZOINSWNOGFThA",
+                "canonicalBaseUrl": "/@FoxNews"
+               }
+              }
+             }
+            ]
+           }
+          }
+         },
+         {
+          "videoRenderer": {
+           "videoId": "3XqBtruTq5k",
+           "title": {
+            "runs": [
+             {
+              "text": "JUST IN: US reportedly warns Gulf allies"
+             }
+            ]
+           },
+           "longBylineText": {
+            "runs": [
+             {
+              "text": "Fox News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCXIJgqnII2ZOINSWNOGFThA",
+                "canonicalBaseUrl": "/@FoxNews"
+               }
+              }
+             }
+            ]
+           },
+           "publishedTimeText": {
+            "simpleText": "16h ago"
+           },
+           "lengthText": {
+            "simpleText": "2:03"
+           },
+           "viewCountText": {
+            "simpleText": "381,765 views"
+           },
+           "navigationEndpoint": {
+            "watchEndpoint": {
+             "videoId": "3XqBtruTq5k"
+            }
+           },
+           "badges": [
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_SIMPLE",
+              "label": "New"
+             }
+            },
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_MEDIA",
+              "label": "CC"
+             }
+            }
+           ],
+           "ownerText": {
+            "runs": [
+             {
+              "text": "Fox News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCXIJgqnII2ZOINSWNOGFThA",
+                "canonicalBaseUrl": "/@FoxNews"
+               }
+              }
+             }
+            ]
+           },
+           "shortBylineText": {
+            "runs": [
+             {
+              "text": "Fox News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCXIJgqnII2ZOINSWNOGFThA",
+                "canonicalBaseUrl": "/@FoxNews"
+               }
+              }
+             }
+            ]
+           }
+          }
+         },
+         {
+          "videoRenderer": {
+           "videoId": "ZJpswWn43W8",
+           "title": {
+            "runs": [
+             {
+              "text": "This Morning’s Top Headlines – Oct. 28 | Morning News NOW"
+             }
+            ]
+           },
+           "longBylineText": {
+            "runs": [
+             {
+              "text": "NBC News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCeY0bbntWzzVIaj2z3QigXg",
+                "canonicalBaseUrl": "/@NBCNews"
+               }
+              }
+             }
+            ]
+           },
+           "publishedTimeText": {
+            "simpleText": "15h ago"
+           },
+           "lengthText": {
+            "simpleText": "23:32"
+           },
+           "viewCountText": {
+            "simpleText": "88,794 views"
+           },
+           "navigationEndpoint": {
+            "watchEndpoint": {
+             "videoId": "ZJpswWn43W8"
+            }
+           },
+           "badges": [
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_SIMPLE",
+              "label": "New"
+             }
+            },
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_MEDIA",
+              "label": "CC"
+             }
+            }
+           ],
+           "ownerText": {
+            "runs": [
+             {
+              "text": "NBC News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCeY0bbntWzzVIaj2z3QigXg",
+                "canonicalBaseUrl": "/@NBCNews"
+               }
+              }
+             }
+            ]
+           },
+           "shortBylineText": {
+            "runs": [
+             {
+              "text": "NBC News",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCeY0bbntWzzVIaj2z3QigXg",
+                "canonicalBaseUrl": "/@NBCNews"
+               }
+              }
+             }
+            ]
+           }
+          }
+         },
+         {
+          "videoRenderer": {
+           "videoId": "ns9RC-PntuQ",
+           "title": {
+            "runs": [
+             {
+              "text": "4 Minutes 24 Headlines LIVE | Top News | 29-10-2026 - TV9"
+             }
+            ]
+           },
+           "longBylineText": {
+            "runs": [
+             {
+              "text": "TV9 USA",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UC7qRyUvlsuXGnfGuOrLRG0g",
+                "canonicalBaseUrl": "/@TV9USA"
+               }
+              }
+             }
+            ]
+           },
+           "viewCountText": {
+            "runs": [
+             {
+              "text": "643"
+             },
+             {
+              "text": " watching"
+             }
+            ]
+           },
+           "navigationEndpoint": {
+            "watchEndpoint": {
+             "videoId": "ns9RC-PntuQ"
+            }
+           },
+           "badges": [
+            {
+             "metadataBadgeRenderer": {
+              "icon": {
+               "iconType": "LIVE"
+              },
+              "style": "BADGE_STYLE_TYPE_LIVE_NOW",
+              "label": "LIVE"
+             }
+            },
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_SIMPLE",
+              "label": "New"
+             }
+            }
+           ],
+           "ownerText": {
+            "runs": [
+             {
+              "text": "TV9 USA",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UC7qRyUvlsuXGnfGuOrLRG0g",
+                "canonicalBaseUrl": "/@TV9USA"
+               }
+              }
+             }
+            ]
+           },
+           "shortBylineText": {
+            "runs": [
+             {
+              "text": "TV9 USA",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UC7qRyUvlsuXGnfGuOrLRG0g",
+                "canonicalBaseUrl": "/@TV9USA"
+               }
+              }
+             }
+            ]
+           }
+          }
+         },
+         {
+          "videoRenderer": {
+           "videoId": "oy97Z9AyN_4",
+           "title": {
+            "runs": [
+             {
+              "text": "ABC World News Tonight with David Muir Full Broadcast - Oct. 28, 2026"
+             }
+            ]
+           },
+           "longBylineText": {
+            "runs": [
+             {
+              "text": "MF Entertainment Official",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCA6WKsz09QeFtSKNI0LIfiA",
+                "canonicalBaseUrl": "/@MF-EntertainmentYT"
+               }
+              }
+             }
+            ]
+           },
+           "publishedTimeText": {
+            "simpleText": "3h ago"
+           },
+           "lengthText": {
+            "simpleText": "21:24"
+           },
+           "viewCountText": {
+            "simpleText": "7,938 views"
+           },
+           "navigationEndpoint": {
+            "watchEndpoint": {
+             "videoId": "oy97Z9AyN_4"
+            }
+           },
+           "badges": [
+            {
+             "metadataBadgeRenderer": {
+              "style": "BADGE_STYLE_TYPE_SIMPLE",
+              "label": "New"
+             }
+            }
+           ],
+           "ownerText": {
+            "runs": [
+             {
+              "text": "MF Entertainment Official",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCA6WKsz09QeFtSKNI0LIfiA",
+                "canonicalBaseUrl": "/@MF-EntertainmentYT"
+               }
+              }
+             }
+            ]
+           },
+           "shortBylineText": {
+            "runs": [
+             {
+              "text": "MF Entertainment Official",
+              "navigationEndpoint": {
+               "browseEndpoint": {
+                "browseId": "UCA6WKsz09QeFtSKNI0LIfiA",
+                "canonicalBaseUrl": "/@MF-EntertainmentYT"
+               }
+              }
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      }
+     ],
+     "targetId": "search-feed"
+    }
+   }
+  }
+ },
+ "estimatedResults": "6635183"
+}

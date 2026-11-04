@@ -1,0 +1,103 @@
+# YouTube Transcript Tool - settings
+# Edit this file in Notepad, save it, then double-click run.bat.
+# Anything you pass on the command line overrides what is written here.
+
+[search]
+# The search terms. Each one is searched separately.
+keywords = [
+    "ai agents",
+    "claude code tutorial",
+]
+# You can also keep keywords in a text file (one per line). They are ADDED to the list above,
+# so empty the list (keywords = []) if you only want the file's keywords:
+# keywords_file = "keywords.txt"
+
+min_views = 10000          # only keep videos with at least this many views
+rising_views_per_day = 0   # e.g. 20000: ALSO keep brand-new videos under min_views that are getting
+                           # at least this many views per day (catches fast risers; 0 = off)
+within = "month"           # how new: "today", "week", "month", "year" or "any"
+# max_age_days = 10        # optional finer limit, e.g. last 10 days
+max_results = 25           # keep the newest N matching videos per keyword (0 = all)
+scan_per_keyword = 150     # how many search results to look through per keyword (per search)
+cascade_windows = true     # also search today/this week inside a wider window, so fresh uploads aren't missed
+
+include_shorts = false
+min_duration = 60          # seconds; skips very short clips
+max_duration = 0           # seconds; 0 = no maximum
+subtitles_only = false     # only videos with captions uploaded by the creator
+exact_dates = false        # look up the exact upload date of each match (slower)
+# exclude_live = true      # skip streams that are live right now or upcoming (finished streams are kept)
+# sorts = ["popularity", "relevance"]   # advanced: which YouTube orderings are scanned
+
+# Optional extra filters on the video title (case-insensitive)
+title_must_contain = []    # e.g. ["tutorial", "guide"]  (any one of them)
+exclude_words = []         # e.g. ["reaction", "live stream"]
+exclude_channels = []      # channel names or IDs (e.g. "UCxxxx...")
+only_channels = []         # if not empty, keep ONLY videos from these channel names or IDs
+drop_reuploads = true      # skip copies of a video re-uploaded by another channel (same title & length)
+
+# Search engine:
+#   "auto"  = uses the YouTube Data API if an api_key is set, otherwise yt-dlp (no key needed)
+#   "ytdlp" = always key-less
+#   "api"   = always the official API (exact dates + true newest-first ordering)
+backend = "auto"
+api_key = ""               # free key from https://console.cloud.google.com (YouTube Data API v3)
+# search_language = "en"   # API search only: prefer results in this language
+
+# Optional: different settings for particular keywords. Copy a block per keyword.
+# Allowed: min_views, rising_views_per_day, within, max_age_days, max_results, scan_per_keyword, include_shorts,
+#          min_duration, max_duration, subtitles_only, title_must_contain, exclude_words, exclude_channels
+# [[keyword_settings]]
+# keyword = "claude code tutorial"
+# min_views = 2000
+# within = "week"
+
+[transcripts]
+download_transcripts = true
+languages = ["en"]          # preferred transcript languages, in order
+allow_other_languages = true  # if none of those exist, save the video's own language
+translate = false           # ...or instead get YouTube's machine translation into your first language
+prefer_manual = true        # creator-uploaded captions before auto-generated ones
+formats = ["txt", "json"]   # any of: "txt", "md", "srt", "vtt", "json"
+txt_timestamps = false      # add [mm:ss] at the start of each paragraph in .txt files
+strip_sound_tags = false    # remove [Music], [Applause], (laughs) and similar from the text
+paragraph_seconds = 30      # group text into paragraphs of roughly this many seconds
+combine = true              # also write AI-ready Markdown files: one per keyword per run, all its transcripts
+combine_max_words = 80000   # ...split into parts of at most this many words so each fits an AI chat
+                            # (~80k words = ~110k tokens; 0 = never split)
+transcript_methods = ["ytdlp", "api"]  # tried in order (yt-dlp copes best with YouTube's checks)
+retry_failed = false        # re-try videos that had no transcript last time
+max_transcripts_per_run = 0 # 0 = no limit; otherwise the rest are fetched on the next run
+
+[output]
+output_dir = "output"       # relative to this folder, or a full path like 'C:\Users\you\Documents\Transcripts'
+organize_by = "keyword"     # "keyword", "channel" or "flat"
+
+[network]
+delay_seconds = 5.0         # pause between videos (randomised), per worker
+videos_per_hour_per_ip = 200  # YouTube allows logged-out use ~300 videos/hour per IP; the tool pauses
+                            # when it gets close (0 = no cap). Short runs are not slowed down at all.
+request_sleep = 0.75        # pause between the individual requests yt-dlp makes
+# When yt-dlp's wiki or a GitHub issue suggests an --extractor-args workaround, paste it here:
+# ytdlp_extractor_args = ["youtube:player_client=default,-web"]
+# Account cookies help against bot checks, but YouTube may suspend an account used like this - use a spare.
+# Best (yt-dlp's advice): private window -> sign in -> open youtube.com/robots.txt -> export cookies.txt -> close.
+cookies_file = ""           # e.g. 'C:\Users\you\Documents\cookies.txt'
+cookies_from_browser = ""   # simpler alternative, e.g. "firefox" (cookies of an open browser go stale)
+
+# Proxy (optional) - all YouTube traffic (search, both transcript methods, API) goes through it.
+# Any of these forms works:  "http://user:pass@host:port"   "socks5://host:1080"   "host:port"
+#                            "host:port:user:pass"  (the format many proxy shops export)
+proxy = ""
+# Several proxies: when YouTube blocks one, the tool switches to the next instead of waiting.
+# proxies = ["http://user:pass@1.2.3.4:8000", "http://user:pass@5.6.7.8:8000"]
+# ...or keep them in a text file, one per line (e.g. the list your proxy provider gives you):
+# proxy_file = "proxies.txt"
+# Rotating "residential" proxy services (e.g. Webshare) give you ONE address that changes IP by itself:
+# proxy = "http://USERNAME-rotate:PASSWORD@p.webshare.io:80"
+# proxy_rotating = "auto"   # "auto" spots Webshare "-rotate" users and known gateways; or true / false
+
+# Parallel downloads. "auto" = one at a time without proxies, one per proxy with them (at most 4).
+# Each worker uses its own proxy (and its own hourly budget), so 4 proxies are about 4x faster.
+workers = "auto"
+# workers_per_proxy = 3     # several workers through ONE rotating proxy (every connection is a new IP)

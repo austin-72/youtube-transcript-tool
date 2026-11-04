@@ -1,0 +1,4 @@
+# Needs Python 3.11 or newer (yt-dlp dropped 3.10 in 2026)
+yt-dlp[default]>=2026.10.26
+youtube-transcript-api>=1.2.4
+requests[socks]>=2.31   # [socks] lets youtube-transcript-api and the API search use SOCKS proxies

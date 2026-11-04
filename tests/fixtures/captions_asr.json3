@@ -1,0 +1,12 @@
+{"wireMagic":"pb3","pens":[{}],"wsWinStyles":[{},{"mhModeHint":2,"juJustifCode":0,"sdScrollDir":3}],"wpWinPositions":[{},{"apPoint":6,"ahHorPos":20,"avVerPos":100,"rcRows":2,"ccCols":40}],
+"events":[
+{"tStartMs":0,"dDurationMs":16960,"id":1,"wpWinPosId":1,"wsWinStyleId":1},
+{"tStartMs":0,"dDurationMs":2560,"wWinId":1,"segs":[{"utf8":"Today"},{"utf8":" we","tOffsetMs":200},{"utf8":" are","tOffsetMs":360},{"utf8":" going","tOffsetMs":680},{"utf8":" to","tOffsetMs":800},{"utf8":" build","tOffsetMs":1000}]},
+{"tStartMs":1110,"dDurationMs":1450,"wWinId":1,"aAppend":1,"segs":[{"utf8":"\n"}]},
+{"tStartMs":1120,"dDurationMs":2720,"wWinId":1,"segs":[{"utf8":"a"},{"utf8":" small","tOffsetMs":360},{"utf8":" web","tOffsetMs":480},{"utf8":" scraper","tOffsetMs":640},{"utf8":" in","tOffsetMs":1120},{"utf8":" Python.","tOffsetMs":1240}]},
+{"tStartMs":2550,"dDurationMs":1290,"wWinId":1,"aAppend":1,"segs":[{"utf8":"\n"}]},
+{"tStartMs":4640,"dDurationMs":2880,"wWinId":1,"segs":[{"utf8":">> Sounds","isSpeakerChange":1},{"utf8":" good,","tOffsetMs":200},{"utf8":" let's","tOffsetMs":360},{"utf8":" go.","tOffsetMs":500},{"utf8":" if a < b","tOffsetMs":700}]},
+{"tStartMs":9350,"wWinId":1,"aAppend":1,"segs":[{"utf8":"\n"}]},
+{"tStartMs":9360,"dDurationMs":2680,"wWinId":1,"segs":[{"utf8":"[music]"}]},
+{"tStartMs":40000,"dDurationMs":3000,"wWinId":1,"segs":[{"utf8":"First"},{"utf8":" install","tOffsetMs":280},{"utf8":" requests.","tOffsetMs":400}]}
+]}
