@@ -11,6 +11,8 @@ Results go to the "output" folder:
 
 Run it again any time: only new videos are downloaded.
 Just one video? Double-click  get_transcript.bat  and paste its link.
+Every video of a channel? In the window (gui.bat) press  Whole channels...
+Not sure what to search for? In the window press  Find related keywords...
 If YouTube changes something and it stops working: double-click update.bat.
 
 Everything else (all settings, the daily schedule, troubleshooting) is in README.md.

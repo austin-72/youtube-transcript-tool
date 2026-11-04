@@ -13,10 +13,13 @@ keywords = [
 # keywords_file = "keywords.txt"
 
 min_views = 10000          # only keep videos with at least this many views
+max_views = 0              # ...and at most this many (0 = no maximum) - e.g. 50000 to find smaller creators
 rising_views_per_day = 0   # e.g. 20000: ALSO keep brand-new videos under min_views that are getting
                            # at least this many views per day (catches fast risers; 0 = off)
 within = "month"           # how new: "today", "week", "month", "year" or "any"
 # max_age_days = 10        # optional finer limit, e.g. last 10 days
+# published_after = "2026-10-01"   # only videos uploaded in this date range (also set within = "any"
+# published_before = "2026-10-31"  # if the range is older than the window above)
 max_results = 25           # keep the newest N matching videos per keyword (0 = all)
 scan_per_keyword = 150     # how many search results to look through per keyword (per search)
 cascade_windows = true     # also search today/this week inside a wider window, so fresh uploads aren't missed
@@ -52,6 +55,16 @@ api_key = ""               # free key from https://console.cloud.google.com (You
 # min_views = 2000
 # within = "week"
 
+[channels]
+# Every video of these channels (or playlists) - with `yt.py channel`, the window's "Whole channels..."
+# button, and also on every normal run when listed here. An @handle, a channel link or a playlist link:
+channels = []               # e.g. ["@mkbhd", "https://www.youtube.com/playlist?list=PL..."]
+channel_tabs = ["videos"]   # any of "videos", "shorts", "streams" (past live streams)
+channel_max_videos = 0      # newest N per channel (0 = all of them)
+channel_min_views = 0
+channel_within = "any"      # "week" with a daily scheduled run = every new upload, nothing older
+# Length limits, exclude_words, max_views and published_after/before above apply to channels too.
+
 [transcripts]
 download_transcripts = true
 languages = ["en"]          # preferred transcript languages, in order
@@ -61,6 +74,8 @@ prefer_manual = true        # creator-uploaded captions before auto-generated on
 formats = ["txt", "json"]   # any of: "txt", "md", "srt", "vtt", "json"
 txt_timestamps = false      # add [mm:ss] at the start of each paragraph in .txt files
 strip_sound_tags = false    # remove [Music], [Applause], (laughs) and similar from the text
+remove_filler_words = false # remove "um", "uh", "erm", "hmm"
+min_transcript_words = 0    # don't keep transcripts shorter than this (music videos, intros); 0 = keep all
 paragraph_seconds = 30      # group text into paragraphs of roughly this many seconds
 combine = true              # also write AI-ready Markdown files: one per keyword per run, all its transcripts
 combine_max_words = 80000   # ...split into parts of at most this many words so each fits an AI chat
@@ -71,7 +86,10 @@ max_transcripts_per_run = 0 # 0 = no limit; otherwise the rest are fetched on th
 
 [output]
 output_dir = "output"       # relative to this folder, or a full path like 'C:\Users\you\Documents\Transcripts'
-organize_by = "keyword"     # "keyword", "channel" or "flat"
+organize_by = "keyword"     # "keyword", "channel", "month" (of upload) or "flat"
+# File names; you can use {date} {channel} {title} {id} {views} {keyword} {lang}. [{id}] is added if missing.
+file_name = "{date} - {channel} - {title} [{id}]"
+list_sort = "newest"        # order of video_list.csv and of the downloads: "newest", "views" or "views_per_day"
 
 [network]
 delay_seconds = 5.0         # pause between videos (randomised), per worker
@@ -101,3 +119,18 @@ proxy = ""
 # Each worker uses its own proxy (and its own hourly budget), so 4 proxies are about 4x faster.
 workers = "auto"
 # workers_per_proxy = 3     # several workers through ONE rotating proxy (every connection is a new IP)
+
+# Which steps use the proxies. Searching and listing channels on your own connection costs no proxy data;
+# transcripts are what YouTube rate-limits, so that's where proxies help most.
+proxy_for_search = true
+proxy_for_transcripts = true
+
+# Proxy data: every byte through your proxies is counted on this PC (output/proxy_usage.json; see
+# `yt.py status`). Optional limits - when one is reached, no new video is started:
+proxy_limit_run_mb = 0      # per run (0 = no limit)
+proxy_limit_month_mb = 0    # per calendar month, across runs, e.g. 2000 for a 2 GB plan
+proxy_price_per_gb = 0      # e.g. 3.5 - shows what a run cost
+# proxy_meter = true        # false turns the counting off (and the limits with it)
+# Fewer bytes per video through proxies: "auto" (= on with proxies), "on", "off", or "max" (smallest;
+# exact upload dates and some chapters may be missing). If it ever misses captions, it switches itself off.
+data_saver = "auto"

@@ -81,8 +81,18 @@ and videos no earlier search had found get a **NEW** badge in the list. (Tick an
 copies — nothing is downloaded again. Keep `json` in `formats` for this.)
 If YouTube changes something and it stops working, double-click **`update.bat`**.
 
+**Every video of a channel?** In the window press *Whole channels…* and paste `@handle`s, channel links or
+playlist links — or `run.bat` with `channels = ["@mkbhd"]` in config.toml, or
+`.venv\Scripts\python yt.py channel @mkbhd --max 100`. You choose videos / Shorts / past live streams,
+"newest N" (0 = all), a minimum view count and how far back to go. The channel's transcripts get their own
+folder, and with *Uploaded: This week* plus the daily schedule you get each new upload automatically.
+
+**Not sure what to search for?** *Find related keywords…* (or `yt.py related "ai agents"`) asks YouTube
+what people type after your keyword, looks at which phrases the top videos' titles share, and at the tags
+of videos you've already downloaded — and shows a ranked list you can tick and add to your keywords.
+
 **Just one video?** Double-click **`get_transcript.bat`** and paste its link (or several links) —
-or use *Transcripts for links / a list…* in the window.
+or use *Links / a list…* in the window.
 Those transcripts go to `output\transcripts\single videos\`.
 
 **Search inside your transcripts:** double-click **`search_transcripts.bat`** (or use *Find in transcripts…*
@@ -131,7 +141,6 @@ transcript it also learns the exact upload date and the list is updated. For exa
 | `allow_other_languages` | If none of those exist, save the video's own language. |
 | `translate` | Instead, get YouTube's machine translation into your first language. |
 | `formats` | Any of `txt`, `md` (with clickable timestamps), `srt`, `vtt`, `json` (all segments + metadata). |
-| `organize_by` | Transcript folders by `keyword`, `channel`, or `flat`. |
 | `output_dir` | Where everything is saved, e.g. `'C:\Users\you\Documents\Transcripts'`. |
 | `delay_seconds` | Pause between videos (default 5, randomised), per worker. |
 | `proxy`, `proxies`, `proxy_file` | Send all YouTube traffic through a proxy; with several, a blocked one is swapped for the next (see Troubleshooting). |
@@ -141,6 +150,17 @@ transcript it also learns the exact upload date and the list is updated. For exa
 | `max_transcripts_per_run` | Cap downloads per run (0 = no limit); the rest are fetched next time. |
 | `strip_sound_tags` | Remove `[Music]`, `[Applause]`, `(laughs)` and similar from the text. |
 | `txt_timestamps` | Put `[mm:ss]` at the start of each paragraph in .txt files. |
+| `max_views` | Skip videos with more views than this — e.g. 50,000 to find smaller creators (0 = no maximum). |
+| `published_after`, `published_before` | Only videos uploaded in a date range, e.g. `"2026-10-01"` (with `within = "any"` if it's older than the window). |
+| `channels`, `channel_tabs`, `channel_max_videos`, `channel_min_views`, `channel_within` | Whole channels or playlists (see *Every video of a channel?* above). |
+| `remove_filler_words` | Remove "um", "uh", "erm", "hmm" from the text. |
+| `min_transcript_words` | Don't keep transcripts shorter than this (music videos, short intros). |
+| `organize_by` | Transcript folders by `keyword`, `channel`, `month` (of upload) or `flat`. |
+| `file_name` | File names, e.g. `"{title} [{id}]"` — fields `{date} {channel} {title} {id} {views} {keyword} {lang}`. |
+| `list_sort` | Order of the list and downloads: `newest`, `views` or `views_per_day`. |
+| `proxy_for_search`, `proxy_for_transcripts` | Which steps use the proxies (e.g. search on your own connection, transcripts through proxies). |
+| `proxy_limit_run_mb`, `proxy_limit_month_mb`, `proxy_price_per_gb` | Proxy data limits and the price, to show costs (see *Proxy data* below). |
+| `data_saver` | Fewer bytes per video through proxies: `auto` (on with proxies), `on`, `off` or `max`. |
 | `combine`, `combine_max_words` | AI-ready files in `combined/`: one per keyword per run, split into parts of at most 80,000 words (fits ChatGPT, Claude, Gemini or a NotebookLM source; 0 = never split). |
 
 **Different settings for one keyword** — add a block like this to config.toml (at the end of the
@@ -169,6 +189,17 @@ run.bat --within week --min-views 100000 --rising 20000
 
 rem the list only, no transcripts
 .venv\Scripts\python yt.py search -k "claude code"
+
+rem every video of a channel; the newest 50 Shorts and videos of the last year; a playlist
+.venv\Scripts\python yt.py channel @mkbhd
+.venv\Scripts\python yt.py channel @mkbhd --tabs videos,shorts --within year --max 50
+.venv\Scripts\python yt.py channel "https://www.youtube.com/playlist?list=PL..."
+
+rem related keywords (and add the best 10 to config.toml)
+.venv\Scripts\python yt.py related "ai agents" --add 10
+
+rem search on your own connection, transcripts through the proxies, at most 500 MB of proxy data
+run.bat --search-direct --data-limit 500
 
 rem transcripts for your own list of links, for links given directly, or for a list made earlier
 .venv\Scripts\python yt.py transcripts my_links.txt
@@ -204,6 +235,19 @@ If the quota runs out mid-run, the tool switches to key-less search automaticall
   separated by spaces) and the tool switches to the next one as soon as YouTube blocks the current one.
   `host:port:user:pass` lists from proxy shops work as they are; `socks5://` works too.
   Run `update.bat` (or `yt.py doctor`) to test every proxy. Note the password is stored in config.toml.
+* **Proxy data (how much, and limits)** — every byte that goes through your proxies is counted on your PC
+  and added up per month in `output\proxy_usage.json`. The log shows it during and after each run
+  ("Proxy data this run: 42 MB, about 0.5 MB per video, 1.3 GB this month"), the window shows it in the
+  bottom bar, and `yt.py status` lists the last months. Set `proxy_limit_month_mb` (e.g. 2000 for a 2 GB
+  plan) and/or `proxy_limit_run_mb`: when a limit is reached no new video is started and the rest wait for
+  the next run. `proxy_price_per_gb` adds the cost. (Your provider measures a little differently, so
+  leave some headroom.) Ways to use less: `proxy_for_search = false` (searching and channel listing use
+  your own connection — they're the big pages, and YouTube rarely blocks them), and the **data saver**,
+  on by default through proxies: it asks YouTube for the captions with one small request instead of
+  three bigger ones, skips the 1 MB player download, and fetches the smallest caption format. If it ever
+  misses captions that the full method finds, it switches itself off for the run. `data_saver = "max"`
+  also skips the watch page (smallest, but exact upload dates may be missing). `yt.py doctor` shows how
+  much one test video used through your proxy.
 * **Faster: parallel downloads** — with proxies, `workers = "auto"` (the default) runs one download per
   proxy at the same time (at most 4; set a number up to 16 to override), each with its own pause and hourly
   budget, so 4 proxies are roughly 4x faster. A blocked or dead proxy is benched and its video goes to

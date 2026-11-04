@@ -263,10 +263,20 @@ def download_all(videos: list[Video], s: Settings, *, ydl_factory: Callable | No
         jobs = [Job(i, v, run.manifest.get(v.video_id)) for i, v in _plan(videos, s, run)]
         if jobs and not (should_stop and should_stop()):
             n_workers = s.resolved_workers()
-            proxies = list(s.proxies or ([s.proxy] if s.proxy else []))
+            proxies = s.stage_proxies("transcripts")
+            if s.proxy and not proxies:
+                log.info("Downloading transcripts over your own connection (proxy_for_transcripts = false).")
             pool = ProxyPool(proxies, per_proxy=int(s.workers_per_proxy or 1),
                              direct_capacity=n_workers, rotating=_rotating_setting(s))
             n_workers = _cap_workers(n_workers, pool, len(jobs))
+            tr.SAVER_HEALTH.reset()
+            from . import netmeter
+
+            if netmeter.active() is not None:
+                netmeter.active().downloads_starting()
+            if proxies and s.data_saver in ("auto", "on", "max") and "ytdlp" in s.transcript_methods:
+                log.info("Data saver %s: fewer and smaller downloads per video through the proxies "
+                         "(data_saver = \"off\" turns it off).", "max" if s.data_saver == "max" else "on")
             _announce(s, pool, n_workers, mask)
             if n_workers > 1:
                 from .ytdlp_common import patch_relative_time_parsing
@@ -276,7 +286,7 @@ def download_all(videos: list[Video], s: Settings, *, ydl_factory: Callable | No
             engine = Engine(jobs, s, pool, build_fetchers=build_fetchers, fetch_one=fetch_one,
                             breaker=MethodBreaker(), looks_offline=_looks_offline, backoff=BACKOFF_SECONDS,
                             on_result=run.apply, ydl_factory=ydl_factory, sleep=sleep, should_stop=should_stop)
-            reason = engine.run(n_workers, prefer_url=s.proxy)
+            reason = engine.run(n_workers, prefer_url=s.proxy if proxies else "")
             run.finish(reason, pool)
         elif jobs:
             run.finish("interrupted", None)
@@ -400,10 +410,10 @@ class _Run:
         have = {k: _resolve(f, root) for k, f in rec.get("files", {}).items()}
         restyle = _render_changed(rec, s)  # e.g. "timestamps in .txt" was switched on
         todo = [f for f in s.formats if f not in have or not have[f].exists() or (restyle and f != "json")]
-        if s.strip_sound_tags:
-            tr.strip_sound_tags(t)
+        raw = t
+        t = _clean_text(t, s)
         base = Path(rec["files"]["json"]).stem  # same name and folder as the files already there
-        files = write_transcript(v, t, folder, todo, s.txt_timestamps, s.paragraph_seconds, base=base)
+        files = write_transcript(v, t, folder, todo, s.txt_timestamps, s.paragraph_seconds, base=base, raw=raw)
         all_files = {**{k: f for k, f in have.items() if f.exists()}, **files}
         v.transcript_status, v.transcript_language, v.transcript_kind = tr.OK, t.language, t.kind
         v.keyword_mentions = rec.get("mentions")
@@ -425,15 +435,22 @@ class _Run:
         v.transcript_status = status
         if v.published_exact:
             self.manifest.update(v.video_id, published=v.published, published_exact=True)
-        if t is not None and s.strip_sound_tags:
-            tr.strip_sound_tags(t)
+        raw = t
+        if t is not None:
+            t = _clean_text(t, s)
+            words = len(t.text.split())
+            if s.min_transcript_words and words < s.min_transcript_words:
+                t, status = None, tr.NO_TRANSCRIPT
+                msg = f"only {words} words (min_transcript_words = {s.min_transcript_words})"
         via = f"  via {r.via}" if r.via and s.resolved_workers() > 1 else ""
         if t is not None:
             v.transcript_status = tr.OK
             v.transcript_language, v.transcript_kind = t.language, t.kind
-            v.keyword_mentions = count_mentions(t.text, v.keyword)
+            # "mentions" = how often the transcript says the search words; a channel name isn't one
+            v.keyword_mentions = None if v.source in ("channel", "playlist") else count_mentions(t.text, v.keyword)
             folder = transcript_folder(self.tdir, v, s.organize_by)
-            files = write_transcript(v, t, folder, s.formats, s.txt_timestamps, s.paragraph_seconds)
+            files = write_transcript(v, t, folder, s.formats, s.txt_timestamps, s.paragraph_seconds,
+                                     template=s.file_name, raw=raw)
             v.transcript_file = str(files.get(s.formats[0], "")) if s.formats else ""
             self.manifest.update(v.video_id, status=tr.OK, method=method, language=t.language, kind=t.kind,
                                  files={k: _relative(p, root) for k, p in files.items()}, error="",
@@ -448,6 +465,7 @@ class _Run:
             self.manifest.update(v.video_id, status=status, method=method, error=msg, attempts=attempts,
                                  title=v.title, run=self.stamp, published=v.published, po_token_hits=po_hits,
                                  next_retry=next_retry_time(po_hits) if status == tr.PO_TOKEN else "")
+            v.transcript_status = status
             self.stats[status] += 1
             log.info("[%d/%d] %-5s %s  (%s)%s", self._tick(), self.total, _label(status),
                      _short(v.title or v.video_id), msg, via)
@@ -456,7 +474,18 @@ class _Run:
         if self.fetched % 10 == 0 and self.fetched < self.fetch_total:
             per = (time.monotonic() - self.started) / self.fetched
             left = self.fetch_total - self.fetched
-            log.info("    ...%d done this run, %s left for the remaining %d", self.fetched, _eta(per * left), left)
+            from . import netmeter
+
+            sess = netmeter.active()
+            data = ""
+            if sess is not None:
+                sess.save()  # a crash or a closed window still leaves the count on disk
+                pv = sess.per_video()
+                if pv:
+                    data = f" (proxy data: {netmeter.fmt_bytes(sess.meter.total)} so far, ~{netmeter.fmt_bytes(pv)} " \
+                           f"per video, ~{netmeter.fmt_bytes(pv * left)} more)"
+            log.info("    ...%d done this run, %s left for the remaining %d%s", self.fetched, _eta(per * left), left,
+                     data)
         # the connection itself is down (no proxy to switch to): stop instead of failing every video
         self.offline_in_a_row = self.offline_in_a_row + 1 if status == tr.ERROR and _looks_offline(msg) else 0
         if self.offline_in_a_row >= MAX_CONSECUTIVE_ERRORS and self.fetched < self.fetch_total:
@@ -481,6 +510,13 @@ class _Run:
                       getattr(self, "last_error", ""))
             log.error("Check your internet connection, or run update.bat if YouTube changed something. "
                       "Unfinished videos will be tried again on the next run.")
+        elif reason == "data_limit":
+            self.stats["stopped_data_limit"] += 1
+            from . import netmeter
+
+            sess = netmeter.active()
+            log.warning("Stopping: %s. Unfinished videos will be fetched on the next run.",
+                        sess.limit_message() if sess else "proxy data limit reached")
         elif reason == "interrupted":
             self.stats["interrupted"] += 1
             log.warning("Interrupted - progress saved. Run again to continue where you left off.")
@@ -488,9 +524,26 @@ class _Run:
             self.stats["interrupted"] += 1
 
 
+def _clean_text(t, s: Settings):
+    """A cleaned copy for the readable formats; the .json keeps the original text, so switching the
+    cleaning off later rebuilds the files with nothing lost."""
+    if not (s.strip_sound_tags or s.remove_filler_words):
+        return t
+    import copy
+
+    t = copy.copy(t)
+    t.segments = list(t.segments)
+    if s.strip_sound_tags:
+        tr.strip_sound_tags(t)
+    if s.remove_filler_words:
+        tr.remove_filler_words(t)
+    return t
+
+
 def render_signature(s: Settings) -> str:
     """The settings that shape the text of transcript files (not which video/track was fetched)."""
-    return f"ts={int(bool(s.txt_timestamps))};sound={int(bool(s.strip_sound_tags))};para={s.paragraph_seconds}"
+    sig = f"ts={int(bool(s.txt_timestamps))};sound={int(bool(s.strip_sound_tags))};para={s.paragraph_seconds}"
+    return sig + (";filler=1" if s.remove_filler_words else "")
 
 
 def _render_changed(rec: dict, s: Settings) -> bool:

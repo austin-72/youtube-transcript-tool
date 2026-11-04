@@ -259,7 +259,7 @@ def test_ytdlp_captions_dropped_for_po_token_is_a_token_wall():
     ydl = FakeYDL(_info(), warnings=[warn])
     f = tr.YtDlpFetcher(S(), ydl_factory=lambda: ydl)
     f._get_ydl()
-    f._logger = ydl.logger = YdlLogger()
+    f._loggers["full"] = ydl.logger = YdlLogger()
     try:
         f.fetch(Video(video_id="abcdefghijk"))
     except tr.FetchError as e:
@@ -283,9 +283,11 @@ def test_strip_sound_tags():
     from yt_transcripts.models import Segment, Transcript
 
     t = Transcript("x", "en", segments=[Segment(0, 1, "[Music]"), Segment(1, 1, "hello [Applause] there (laughs)"),
-                                        Segment(2, 1, "♪♪ la la ♪♪"), Segment(3, 1, "keep [sic] short")])
+                                        Segment(2, 1, "♪♪ la la ♪♪"), Segment(3, 1, "keep [sic] short"),
+                                        Segment(4, 1, "see [3] and the [EU] [upbeat music] [MUSIC]")])
     tr.strip_sound_tags(t)
-    assert [s.text for s in t.segments] == ["hello there", "la la", "keep short"]
+    # short bracketed words are content (citations, abbreviations), not sound labels
+    assert [s.text for s in t.segments] == ["hello there", "la la", "keep [sic] short", "see [3] and the [EU]"]
 
 
 def test_rate_limit_reported_as_warning_is_blocked_not_no_captions():
@@ -294,7 +296,7 @@ def test_rate_limit_reported_as_warning_is_blocked_not_no_captions():
     ydl = FakeYDL(_info(), warnings=["abc: This content isn't available, try again later."])
     f = tr.YtDlpFetcher(S(), ydl_factory=lambda: ydl)
     f._get_ydl()
-    f._logger = ydl.logger = YdlLogger()
+    f._loggers["full"] = ydl.logger = YdlLogger()
     try:
         f.fetch(Video(video_id="abcdefghijk"))
     except tr.FetchError as e:
@@ -343,7 +345,7 @@ def _fetcher_with_warnings(info, warnings, bodies, **settings):
     ydl = FakeYDL(info, warnings=warnings, bodies=bodies)
     f = tr.YtDlpFetcher(S(**settings), ydl_factory=lambda: ydl)
     f._get_ydl()
-    f._logger = ydl.logger = YdlLogger()
+    f._loggers["full"] = ydl.logger = YdlLogger()
     return f
 
 
@@ -382,3 +384,110 @@ def test_refused_translation_falls_back_to_the_original_language():
         tr.YtDlpFetcher(S(translate=True, allow_other_languages=False), ydl_factory=lambda: ydl).fetch(
             Video(video_id="abcdefghijk"))
     assert e.value.status == tr.BLOCKED
+
+
+# ---- data saver ----------------------------------------------------------------------------------------
+SRV1 = '<?xml version="1.0"?><transcript><text start="0" dur="2">Hello &amp;amp; welcome</text>' \
+       '<text start="2" dur="2">to the show</text></transcript>'
+
+
+def _saver_settings(**kw):
+    from yt_transcripts.config import build_settings
+
+    return build_settings({"languages": ["en"], **kw})
+
+
+def test_saver_profile_choice():
+    tr.SAVER_HEALTH.reset()
+    assert tr.saver_profile(_saver_settings()) == "full"  # own connection: nothing to save
+    assert tr.saver_profile(_saver_settings(proxy="http://127.0.0.1:9")) == "lean"
+    assert tr.saver_profile(_saver_settings(proxy="http://x:1", data_saver="off")) == "full"
+    assert tr.saver_profile(_saver_settings(data_saver="on")) == "lean"
+    assert tr.saver_profile(_saver_settings(data_saver="max")) == "max"
+
+
+def test_saver_options_ask_for_one_client_and_respect_user_overrides():
+    from yt_transcripts.ytdlp_common import base_options
+
+    lean = base_options(_saver_settings(), profile="lean")["extractor_args"]["youtube"]
+    assert lean["player_client"] == ["visionos"] and lean["skip"] == ["dash", "hls"]
+    mx = base_options(_saver_settings(), profile="max")["extractor_args"]["youtube"]
+    assert mx["player_skip"] == ["webpage", "initial_data"]
+    assert "player_client" not in base_options(_saver_settings(), profile="full")["extractor_args"]["youtube"]
+    mine = base_options(_saver_settings(ytdlp_extractor_args=["youtube:player_client=tv"]), profile="lean")
+    assert mine["extractor_args"]["youtube"]["player_client"] == ["tv"]
+
+
+def test_lean_downloads_the_small_caption_format_first():
+    tr.SAVER_HEALTH.reset()
+    auto = {"en": [{"ext": "json3", "url": "u-json3"}, {"ext": "srv1", "url": "u-srv1"}]}
+    ydl = FakeYDL(_info(auto=auto), bodies={"u-srv1": SRV1, "u-json3": "{}"})
+    asked = []
+    real = ydl.urlopen
+    ydl.urlopen = lambda u: (asked.append(u), real(u))[1]
+    profiles = []
+    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9"),
+                        ydl_factory=lambda profile="full": (profiles.append(profile), ydl)[1])
+    t = f.fetch(Video(video_id="abcdefghijk"))
+    assert profiles == ["lean"] and asked == ["u-srv1"]
+    assert [s.text for s in t.segments] == ["Hello &amp; welcome", "to the show"]
+
+
+def test_lean_miss_is_checked_with_the_full_method_and_switches_off():
+    tr.SAVER_HEALTH.reset()
+    auto = {"en": [{"ext": "srv1", "url": "u"}]}
+    lean = FakeYDL(_info())  # the lean client saw no captions...
+    full = FakeYDL(_info(auto=auto), bodies={"u": SRV1})  # ...the full method finds them
+    made = []
+
+    def factory(profile="full"):
+        made.append(profile)
+        return lean if profile == "lean" else full
+    s = _saver_settings(proxy="http://127.0.0.1:9")
+    for _ in range(3):
+        f = tr.YtDlpFetcher(s, ydl_factory=factory)
+        assert f.fetch(Video(video_id="abcdefghijk")).segments
+    assert made == ["lean", "full"] * 3
+    assert tr.SAVER_HEALTH.disabled and tr.saver_profile(s) == "full"
+    tr.SAVER_HEALTH.reset()
+
+
+def test_lean_does_not_double_fetch_blocked_or_wrong_language():
+    tr.SAVER_HEALTH.reset()
+    made = []
+    blocked = FakeYDL(exc=Exception("Sign in to confirm you're not a bot"))
+    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9"),
+                        ydl_factory=lambda profile="full": (made.append(profile), blocked)[1])
+    with pytest.raises(tr.FetchError) as e:
+        f.fetch(Video(video_id="abcdefghijk"))
+    assert e.value.status == tr.BLOCKED and made == ["lean"]
+    made.clear()
+    fr = FakeYDL(_info(auto={"fr": [{"ext": "srv1", "url": "u"}]}), bodies={"u": SRV1})
+    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9", allow_other_languages=False),
+                        ydl_factory=lambda profile="full": (made.append(profile), fr)[1])
+    with pytest.raises(tr.FetchError) as e:
+        f.fetch(Video(video_id="abcdefghijk"))
+    assert e.value.status == tr.NO_TRANSCRIPT and made == ["lean"]
+
+
+def test_no_captions_is_only_sampled_not_always_double_checked():
+    tr.SAVER_HEALTH.reset()
+    made = []
+    nocap = FakeYDL(_info())
+
+    def factory(profile="full"):
+        made.append(profile)
+        return nocap
+    s = _saver_settings(proxy="http://127.0.0.1:9")
+    for _ in range(12):
+        f = tr.YtDlpFetcher(s, ydl_factory=factory)
+        with pytest.raises(tr.FetchError):
+            f.fetch(Video(video_id="abcdefghijk"))
+    assert made.count("full") == 4  # videos 1-3 and 10 are double-checked, not all 12
+    assert not tr.SAVER_HEALTH.disabled  # the full method agreed: no misses
+    tr.SAVER_HEALTH.reset()
+
+
+def test_max_saver_uses_lean_when_translating():
+    tr.SAVER_HEALTH.reset()
+    assert tr.saver_profile(_saver_settings(data_saver="max", translate=True)) == "lean"

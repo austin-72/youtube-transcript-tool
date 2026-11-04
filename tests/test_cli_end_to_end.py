@@ -43,7 +43,11 @@ class FakeFetcher:
         self.last_info = None
         if v.video_id == "zMajAKkmxws":
             raise tr.FetchError(tr.NO_TRANSCRIPT, "video has no captions")
-        self.last_info = {"upload_date": "20261026", "view_count": (v.views or 0) + 1}
+        import datetime as dt
+
+        # an exact date newer than every "x days ago" in the recorded search (relative to today)
+        yesterday = (dt.date.today() - dt.timedelta(days=1)).strftime("%Y%m%d")
+        self.last_info = {"upload_date": yesterday, "view_count": (v.views or 0) + 1}
         segs = [Segment(i * 5.0, 5.0, f"Line {i} of {v.video_id}.") for i in range(20)]
         return Transcript(v.video_id, "en", "English", "auto", "ytdlp", segs)
 
@@ -66,7 +70,10 @@ def test_run_command_end_to_end(tmp_path, replay_search, monkeypatch):
     assert status == {"Pfd916_a_cs": "ok", "zZgF8mvvORg": "ok", "zMajAKkmxws": "no_transcript"}
     # exact date learned while fetching the transcript replaces the "15h ago" estimate
     first = rows[1]
-    assert first["published"] == "2026-10-26" and first["published_exact"] == "True"
+    import datetime as dt
+
+    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    assert first["published"] == yesterday and first["published_exact"] == "True"
 
     txts = list((out / "transcripts" / "python tutorial").glob("*.txt"))
     assert len(txts) == 2

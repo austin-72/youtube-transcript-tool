@@ -37,27 +37,53 @@ WINDOW_TEXT = {"today": "in the last day", "day": "in the last day", "week": "in
                "month": "in the last month", "year": "in the last year", "any": "at any time"}
 
 
-def search_summary(s) -> str:
+def search_summary(s, channels: list[str] | None = None) -> str:
     """One plain line saying which search made this list (so an old list still explains itself)."""
-    kws = s.all_keywords()
-    if not kws:
-        return ""
-    shown = ", ".join(f"\u201c{k}\u201d" for k in kws[:6]) + (f" and {len(kws) - 6} more" if len(kws) > 6 else "")
-    parts = [f"Searched {shown}", f"at least {s.min_views:,} views"]
-    if s.rising_views_per_day:
-        parts[-1] += f" (or {s.rising_views_per_day:,}+ views/day)"
-    days = s.effective_max_age_days() if s.max_age_days else None  # the cut-off actually applied
-    parts.append(f"uploaded in the last {days:g} days" if days else WINDOW_TEXT.get(s.within, s.within))
-    if s.max_results:
-        parts.append(f"newest {s.max_results} per keyword")
-    if not s.include_shorts:
-        parts.append("no Shorts")
-    if s.only_channels:
-        parts.append(f"only {len(s.only_channels)} channel{'s' if len(s.only_channels) != 1 else ''}")
-    line = " · ".join(parts)
-    if s.keyword_settings:
-        line += " (some keywords have their own settings)"
-    return line
+    kws = [] if channels else s.all_keywords()
+    chans = list(channels or s.channels or [])
+    lines = []
+    if kws:
+        shown = ", ".join(f"\u201c{k}\u201d" for k in kws[:6]) + (f" and {len(kws) - 6} more" if len(kws) > 6 else "")
+        parts = [f"Searched {shown}", f"at least {s.min_views:,} views"]
+        if s.max_views:
+            parts[-1] += f" and at most {s.max_views:,}"
+        if s.rising_views_per_day:
+            parts[-1] += f" (or {s.rising_views_per_day:,}+ views/day)"
+        days = s.effective_max_age_days() if s.max_age_days else None  # the cut-off actually applied
+        parts.append(f"uploaded in the last {days:g} days" if days else WINDOW_TEXT.get(s.within, s.within))
+        parts += _common_parts(s)
+        if s.max_results:
+            parts.append(f"newest {s.max_results} per keyword")
+        if not s.include_shorts:
+            parts.append("no Shorts")
+        if s.only_channels:
+            parts.append(f"only {len(s.only_channels)} channel{'s' if len(s.only_channels) != 1 else ''}")
+        line = " · ".join(parts)
+        if s.keyword_settings:
+            line += " (some keywords have their own settings)"
+        lines.append(line)
+    if chans:
+        shown = ", ".join(chans[:6]) + (f" and {len(chans) - 6} more" if len(chans) > 6 else "")
+        parts = [f"{'Channels' if len(chans) > 1 else 'Channel'} {shown}",
+                 ", ".join(s.channel_tabs or ["videos"]),
+                 WINDOW_TEXT.get(s.channel_within, s.channel_within)]
+        if s.channel_min_views:
+            parts.append(f"at least {s.channel_min_views:,} views")
+        parts += _common_parts(s)
+        parts.append(f"newest {s.channel_max_videos} per channel" if s.channel_max_videos else "every video")
+        lines.append(" · ".join(parts))
+    return " | ".join(lines)
+
+
+def _common_parts(s) -> list[str]:
+    out = []
+    if s.published_after or s.published_before:
+        out.append(f"uploaded {s.published_after or '…'} to {s.published_before or 'today'}")
+    if s.min_duration or s.max_duration:
+        lo = f"{s.min_duration // 60}m" if s.min_duration else "0"
+        hi = f"{s.max_duration // 60}m" if s.max_duration else "any length"
+        out.append(f"length {lo}–{hi}")
+    return out
 
 
 def transcript_preview(path: str, limit: int = PREVIEW_CHARS) -> str:

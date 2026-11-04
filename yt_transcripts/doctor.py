@@ -146,6 +146,9 @@ def run_doctor(s: Settings, test_video: str = "dQw4w9WgXcQ") -> int:
         from .search_ytdlp import search_keyword
 
         ts = copy.copy(s)
+        if not s.proxy_for_search:
+            ts.proxy = ""
+            print("         (searching over your own connection: proxy_for_search = false)")
         ts.sorts, ts.scan_per_keyword, ts.include_shorts, ts.within = ["relevance"], 5, False, "year"
         ts.cascade_windows = False
         res = search_keyword("python tutorial", ts)
@@ -178,20 +181,37 @@ def run_doctor(s: Settings, test_video: str = "dQw4w9WgXcQ") -> int:
 
     import copy as _copy
 
+    from . import netmeter
+    from .transcripts import saver_profile
+
     ts = _copy.copy(s)
     ts.allow_other_languages = True
+    upstream = s.proxy if s.proxy_for_transcripts else ""
     video = Video(video_id=test_video, title="test video")
     any_ok = False
-    for f in build_fetchers(ts):
-        try:
-            t = f.fetch(video)
-            any_ok = True
-            _ok(f"transcript via {f.name}: {len(t.segments)} lines, language {t.language} ({t.kind})")
-        except FetchError as e:
-            (_warn if f.name == "api" else _fail)(f"transcript via {f.name}: {e.status} - {e}")
-        finally:
-            if hasattr(f, "close"):
-                f.close()
+    with netmeter.Session(ts, "doctor") as sess:
+        for name in ts.transcript_methods:
+            ts1 = _copy.copy(ts)
+            ts1.transcript_methods = [name]
+            ts1.proxy = netmeter.route(upstream)
+            before = sess.meter.total
+            for f in build_fetchers(ts1):
+                try:
+                    t = f.fetch(video)
+                    any_ok = True
+                    used = sess.meter.total - before
+                    data = ""
+                    if upstream and sess.enabled:
+                        mode = saver_profile(ts1) if f.name == "ytdlp" else ""
+                        data = f"; used {netmeter.fmt_bytes(used)} of proxy data" + (
+                            f" (data saver: {mode})" if mode else "")
+                    _ok(f"transcript via {f.name}: {len(t.segments)} lines, language {t.language} "
+                        f"({t.kind}){data}")
+                except FetchError as e:
+                    (_warn if f.name == "api" else _fail)(f"transcript via {f.name}: {e.status} - {e}")
+                finally:
+                    if hasattr(f, "close"):
+                        f.close()
     if not any_ok:
         failures += 1
         print("\n  No method could download the test transcript. If the error mentions a bot check,\n"

@@ -101,7 +101,7 @@ def test_paste_links_runs_transcripts_for_them(root, tmp_path, monkeypatch):
 
     got = {}
     monkeypatch.setattr(simpledialog, "askstring", lambda *a, **k: "https://youtu.be/aaaaaaaaaaa  bbbbbbbbbbb")
-    monkeypatch.setattr(cli, "cmd_run", lambda s, transcripts_only_list=None, should_stop=None:
+    monkeypatch.setattr(cli, "cmd_run", lambda s, transcripts_only_list=None, should_stop=None, channels=None:
                         got.setdefault("list", transcripts_only_list))
     app = gui.App(root, tmp_path / "none.toml")
     app.keywords.delete("1.0", "end")  # no keywords needed for links
@@ -184,3 +184,54 @@ def test_advanced_section_is_hidden_but_shows_what_is_in_use(root, tmp_path):
     app._toggle_advanced()
     assert not app.adv_frame.grid_info()
     assert app.collect()["workers"] in ("3", 3)
+
+
+def test_new_advanced_fields_round_trip(root, tmp_path):
+    from yt_transcripts import gui
+    from yt_transcripts.config import load_config
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[network]\nproxy = "http://a:1"\nproxy_for_search = false\nproxy_limit_month_mb = 2000\n'
+                   'data_saver = "max"\n', encoding="utf-8")
+    app = gui.App(root, cfg)
+    v = app.collect()
+    assert v["proxy_for_search"] is False and v["proxy_for_transcripts"] is True
+    assert v["proxy_limit_month_mb"] == 2000 and v["data_saver"] == "max"
+    summary = app.adv_summary.get()
+    assert "proxies for transcripts only" in summary and "proxy data limit" in summary and "data saver max" in summary
+    app.vars["max_views"].set("50000")
+    app.vars["remove_filler_words"].set(True)
+    app._save()
+    saved = load_config(cfg)
+    assert saved["max_views"] == 50000 and saved["remove_filler_words"] is True
+    assert saved["proxy_for_search"] is False
+
+
+def test_channels_dialog_starts_a_channel_run(root, tmp_path, monkeypatch):
+    from yt_transcripts import gui
+    from yt_transcripts.config import load_config
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('output_dir = "%s"\n' % (tmp_path / "out").as_posix(), encoding="utf-8")
+    app = gui.App(root, cfg)
+    started = {}
+    monkeypatch.setattr(app, "_start", lambda mode, channels=None, extra=None: started.update(
+        mode=mode, channels=channels, extra=extra))
+    app._channels()
+    win = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)][-1]
+
+    def walk(w):
+        yield w
+        for c in w.winfo_children():
+            yield from walk(c)
+    text = next(w for w in walk(win) if isinstance(w, tk.Text))
+    text.insert("1.0", "@somechannel\nhttps://www.youtube.com/playlist?list=PLabcdefghijkl")
+    checks = [w for w in walk(win) if w.winfo_class() == "TCheckbutton"]
+    remember = next(c for c in checks if "Remember" in c.cget("text"))
+    remember.invoke()
+    start = next(w for w in walk(win) if w.winfo_class() == "TButton" and w.cget("text") == "Start")
+    win.grab_release()
+    start.invoke()
+    assert started["mode"] == "channel" and started["channels"][0] == "@somechannel"
+    assert started["extra"]["channel_tabs"] == ["videos"] and started["extra"]["download_transcripts"] is True
+    assert load_config(cfg)["channels"] == ["@somechannel", "https://www.youtube.com/playlist?list=PLabcdefghijkl"]

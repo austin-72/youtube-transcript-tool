@@ -7,6 +7,7 @@ import logging
 from collections import Counter
 from typing import Callable
 
+from . import netmeter
 from .config import Settings
 from .models import Video
 
@@ -33,6 +34,12 @@ def reject_reason(v: Video, s: Settings, now: dt.datetime) -> str | None:
         return "live/upcoming"
     if v.is_short and not s.include_shorts:
         return "short"
+    if s.max_views and v.views is not None and v.views > s.max_views:
+        return "above max_views"
+    if s.published_after or s.published_before:
+        r = _date_range_reason(v, s)
+        if r:
+            return r
     if s.min_views > 0:
         if v.views is None:
             return "views unknown"
@@ -65,12 +72,37 @@ def reject_reason(v: Video, s: Settings, now: dt.datetime) -> str | None:
     return None
 
 
+def _date_range_reason(v: Video, s: Settings) -> str | None:
+    from .config import parse_day
+
+    pub = v.published_dt
+    if pub is None:
+        return "upload date unknown"
+    day = pub.date()
+    slack = dt.timedelta(days=0 if v.published_exact else APPROX_SLACK_DAYS)
+    after, before = parse_day(s.published_after), parse_day(s.published_before)
+    if after and day + slack < after:
+        return "before published_after"
+    if before and day - slack > before:
+        return "after published_before"
+    return None
+
+
 def rank_newest(videos: list[Video]) -> list[Video]:
     """Newest first; unknown dates last; ties broken by more views."""
     def key(v: Video):
         p = v.published_dt
         return (p is not None, p or dt.datetime.min.replace(tzinfo=dt.timezone.utc), v.views or 0)
     return sorted(videos, key=key, reverse=True)
+
+
+def sort_for_list(videos: list[Video], how: str = "newest") -> list[Video]:
+    """The order of the saved list (and of the downloads): list_sort = newest | views | views_per_day."""
+    if how == "views":
+        return sorted(videos, key=lambda v: v.views if v.views is not None else -1, reverse=True)
+    if how == "views_per_day":
+        return sorted(videos, key=lambda v: v.views_per_day() or -1.0, reverse=True)
+    return rank_newest(videos)
 
 
 def _norm_title(t: str) -> str:
@@ -146,15 +178,18 @@ def run_search(s: Settings, *, ydl_factory: Callable | None = None, api=None,
     log.info("Search backend: %s", "YouTube Data API" if backend == "api" else "yt-dlp (no API key)")
     keywords = s.all_keywords()
     # the API's quota belongs to the key, not the IP: no point in parallel API searches
-    n_workers = min(s.resolved_workers(), len(keywords)) if backend == "ytdlp" else 1
-    proxies = list(s.proxies or ([s.proxy] if s.proxy else []))
+    n_workers = min(s.resolved_workers("search"), len(keywords)) if backend == "ytdlp" else 1
+    proxies = s.stage_proxies("search")
+    if s.proxy and not proxies and s.proxy_for_transcripts:
+        log.info("Searching over your own connection (proxies are used for the transcripts only).")
     from .pipeline import _rotating_setting
 
     pool = ProxyPool(proxies, per_proxy=int(s.workers_per_proxy or 1), direct_capacity=max(1, n_workers),
                      rotating=_rotating_setting(s))
     n_workers = max(1, min(n_workers, pool.total_capacity()))  # more would only wait for a free proxy
     outcomes: dict[int, tuple[list[Video] | None, Exception | None]] = {}
-    last_ok_proxy = [s.proxy]
+    first = s.proxy if proxies else ""
+    last_ok_proxy = [first]
     next_kw = [0]
     lock = threading.Lock()
 
@@ -176,9 +211,9 @@ def run_search(s: Settings, *, ydl_factory: Callable | None = None, api=None,
                 outcomes[i] = (kept, exc)
 
     if n_workers <= 1:
-        worker(s.proxy)
+        worker(first)
     else:
-        threads = [threading.Thread(target=worker, args=(s.proxy if k == 0 else "",), name=f"search{k + 1}",
+        threads = [threading.Thread(target=worker, args=(first if k == 0 else "",), name=f"search{k + 1}",
                                     daemon=True) for k in range(n_workers)]
         for th in threads:
             th.start()
@@ -187,7 +222,7 @@ def run_search(s: Settings, *, ydl_factory: Callable | None = None, api=None,
                 th.join(timeout=0.2)
     if stopping():
         log.warning("Search stopped.")
-    if s.proxy != last_ok_proxy[0] and last_ok_proxy[0]:
+    if proxies and s.proxy != last_ok_proxy[0] and last_ok_proxy[0]:
         s.proxy = last_ok_proxy[0]  # downloads start with a proxy that just worked
 
     combined: dict[str, Video] = {}
@@ -243,8 +278,11 @@ def _keyword_with_retries(i, keywords, s: Settings, pool, prefer, backend, ydl_f
             break
         prefer = None
         tried += 1
+        if slot.url and _data_limit_hit():
+            pool.release(slot)
+            return None, SearchFailed(_data_limit_hit())
         ws = copy.copy(ks)  # this keyword's own copy: never shares a proxy setting with another search
-        ws.proxy = slot.url
+        ws.proxy = netmeter.route(slot.url)  # through the data meter's relay (counts the bytes)
         try:
             raw = _search_one(kw, ws, backend, ydl_factory, api, should_stop)
         except (SearchFailed, ApiError) as exc:
@@ -265,6 +303,11 @@ def _keyword_with_retries(i, keywords, s: Settings, pool, prefer, backend, ydl_f
         return _finish_keyword(kw, raw, ws, s.resolved_backend(), ydl_factory, tag), None
     log.error("  every search for %r failed: %s", kw, last_exc)
     return None, last_exc or SearchFailed("no proxy was free")
+
+
+def _data_limit_hit() -> str:
+    sess = netmeter.active()
+    return sess.limit_message() if sess is not None and sess.limit_reached() else ""
 
 
 def _lease_for_search(pool, prefer, should_stop):

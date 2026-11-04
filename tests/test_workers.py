@@ -408,3 +408,54 @@ def test_search_waits_for_a_busy_proxy_instead_of_dropping_keywords(monkeypatch)
     calls.clear()
     vids = _within(lambda: run_search(s), 20)
     assert len(calls) == 3 and {k for v in vids for k in v.keyword.split("; ")} == {"alpha", "beta", "gamma"}
+
+
+# ---- proxy data meter and per-step proxies ----------------------------------------------------------
+def test_data_limit_stops_starting_new_videos(fake):
+    from yt_transcripts import netmeter
+
+    s = fake(proxies=["http://a:1"], proxy_limit_run_mb=0.1)
+
+    def beh(proxy, vid):
+        netmeter.active().meter.add("a:1", down=40_000)  # each video "costs" 40 kB
+        return _t(vid)
+    Fetcher.behaviour = staticmethod(beh)
+    with netmeter.Session(s) as sess:
+        stats = pipeline.download_all(_vids(10), s, sleep=lambda x: None)
+        assert all("@127.0.0.1:" in p for p, _ in Fetcher.calls)  # through the relay
+    assert stats["ok"] == 3 and stats["stopped_data_limit"] == 1  # 120 kB: the 4th never starts
+    assert sess.videos == 3
+    usage = json.loads((pipeline.Path(s.output_dir) / "proxy_usage.json").read_text())
+    assert usage["months"][netmeter.month_key()]["videos"] == 3
+
+
+def test_used_up_monthly_limit_fetches_nothing(fake):
+    from yt_transcripts import netmeter
+
+    s = fake(proxies=["http://a:1"], proxy_limit_month_mb=1)
+    out = pipeline.Path(s.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "proxy_usage.json").write_text(json.dumps(
+        {"months": {netmeter.month_key(): {"bytes": 1_500_000}}, "runs": []}))
+    with netmeter.Session(s):
+        stats = pipeline.download_all(_vids(3), s, sleep=lambda x: None)
+    assert Fetcher.calls == [] and stats["stopped_data_limit"] == 1
+
+
+def test_transcripts_can_skip_the_proxies(fake):
+    s = fake(proxies=["http://a:1", "http://b:2"], proxy_for_transcripts=False)
+    assert s.resolved_workers() == 1 and s.resolved_workers("search") == 2
+    stats = pipeline.download_all(_vids(3), s)
+    assert stats["ok"] == 3 and {p for p, _ in Fetcher.calls} == {""}
+
+
+def test_search_on_own_connection_transcripts_through_proxies(monkeypatch):
+    from yt_transcripts.search import run_search
+
+    calls = _fake_search(monkeypatch, lambda kw, settings: _hits(kw))
+    s = build_settings({"keywords": ["alpha", "beta"], "within": "any", "min_views": 0,
+                        "proxies": ["http://a:1", "http://b:2"], "proxy_for_search": False})
+    proxies.resolve(s, ".")
+    run_search(s)
+    assert {p for p, _ in calls} == {""}
+    assert s.proxy == "http://a:1"  # still the first proxy for the downloads

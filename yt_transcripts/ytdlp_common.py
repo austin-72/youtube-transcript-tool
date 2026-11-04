@@ -80,7 +80,19 @@ def parse_extractor_args(spec: str) -> tuple[str, dict[str, list[str]]]:
     return key.strip().lower(), args
 
 
-def base_options(settings: Settings, *, logger: YdlLogger | None = None) -> dict[str, Any]:
+# Data-saver profiles for fetching captions (the formats/streams themselves are never needed):
+#   lean - only the "visionos" player client: it needs no player JavaScript (no ~1 MB player download,
+#          no Deno run) and no PO token for captions, and it's one API request instead of three.
+#   max  - lean, and also skip the watch page and the "next" data (the biggest downloads). Exact upload
+#          dates and chapters may be missing then (chapters written in the description still work).
+SAVER_ARGS = {
+    "full": {},
+    "lean": {"player_client": ["visionos"]},
+    "max": {"player_client": ["visionos"], "player_skip": ["webpage", "initial_data"]},
+}
+
+
+def base_options(settings: Settings, *, logger: YdlLogger | None = None, profile: str = "full") -> dict[str, Any]:
     opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": False,
@@ -111,6 +123,7 @@ def base_options(settings: Settings, *, logger: YdlLogger | None = None) -> dict
         opts["cookiesfrombrowser"] = (settings.cookies_from_browser.lower(),)
     if settings.proxy:
         opts["proxy"] = settings.proxy
+    opts["extractor_args"]["youtube"].update(SAVER_ARGS.get(profile, {}))
     for spec in settings.ytdlp_extractor_args or []:  # user-supplied fixes override our defaults
         try:
             key, args = parse_extractor_args(str(spec))
@@ -169,10 +182,10 @@ def warn_if_stale(log) -> None:
                     "or transcripts fail.", age)
 
 
-def make_ydl(settings: Settings, logger: YdlLogger | None = None, **extra: Any):
+def make_ydl(settings: Settings, logger: YdlLogger | None = None, profile: str = "full", **extra: Any):
     import yt_dlp
 
     patch_relative_time_parsing()
-    opts = base_options(settings, logger=logger)
+    opts = base_options(settings, logger=logger, profile=profile)
     opts.update(extra)
     return yt_dlp.YoutubeDL(opts)

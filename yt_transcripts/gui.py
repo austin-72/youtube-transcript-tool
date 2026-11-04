@@ -85,10 +85,14 @@ class App:
         self.keywords = tk.Text(sf, height=6, width=36, wrap="none", font=("Segoe UI", 10))
         self.keywords.grid(row=0, column=1, sticky="nsew", pady=2)
         self.keywords.insert("1.0", "\n".join(s.keywords))
+        self.btn_related = ttk.Button(sf, text="Find related keywords…", command=self._related)
+        self.btn_related.grid(row=1, column=1, sticky="w", pady=(0, 4))
 
-        r = 1
+        r = 2
         V["min_views"] = tk.StringVar(value=str(s.min_views))
         self._row(sf, r, "Minimum views", ttk.Entry(sf, textvariable=V["min_views"], width=14)); r += 1
+        V["max_views"] = tk.StringVar(value=str(s.max_views))
+        self._row(sf, r, "…and at most (0 = no maximum)", ttk.Entry(sf, textvariable=V["max_views"], width=14)); r += 1
         V["rising_views_per_day"] = tk.StringVar(value=str(s.rising_views_per_day))
         self._row(sf, r, "…or rising: views/day (0 = off)",
                   ttk.Entry(sf, textvariable=V["rising_views_per_day"], width=14)); r += 1
@@ -124,11 +128,15 @@ class App:
         self._row(tf, r, "Save as", fmt_frame); r += 1
         V["txt_timestamps"] = tk.BooleanVar(value=s.txt_timestamps)
         ttk.Checkbutton(tf, text="Timestamps in .txt files", variable=V["txt_timestamps"]).grid(row=r, column=1, sticky="w"); r += 1
+        V["remove_filler_words"] = tk.BooleanVar(value=s.remove_filler_words)
+        ttk.Checkbutton(tf, text="Remove um / uh / hmm", variable=V["remove_filler_words"]).grid(
+            row=r, column=1, sticky="w"); r += 1
         V["combine"] = tk.BooleanVar(value=s.combine)
         ttk.Checkbutton(tf, text="Also make AI-ready combined files", variable=V["combine"]).grid(row=r, column=1, sticky="w"); r += 1
         V["organize_by"] = tk.StringVar(value=s.organize_by)
         self._row(tf, r, "Folders by", ttk.Combobox(tf, textvariable=V["organize_by"], state="readonly",
-                                                   values=["keyword", "channel", "flat"], width=12)); r += 1
+                                                   values=["keyword", "channel", "month", "flat"],
+                                                   width=12)); r += 1
         V["output_dir"] = tk.StringVar(value=str(self._abs(s.output_dir)))
         of = ttk.Frame(tf)
         ttk.Entry(of, textvariable=V["output_dir"], width=30).pack(side="left", fill="x", expand=True)
@@ -159,6 +167,18 @@ class App:
                                                            width=6)); r += 1
         ttk.Label(af, text="auto = one per proxy; more than 1 without\nproxies gets you blocked sooner",
                   foreground="gray").grid(row=r, column=1, sticky="w"); r += 1
+        V["data_saver"] = tk.StringVar(value=str(s.data_saver))
+        self._row(af, r, "Data saver (proxies)", ttk.Combobox(af, textvariable=V["data_saver"], state="readonly",
+                                                             values=["auto", "on", "max", "off"], width=6)); r += 1
+        V["proxy_limit_run_mb"] = tk.StringVar(value=f"{s.proxy_limit_run_mb:g}")
+        self._row(af, r, "Proxy data limit per run (MB)",
+                  ttk.Entry(af, textvariable=V["proxy_limit_run_mb"], width=8)); r += 1
+        V["proxy_limit_month_mb"] = tk.StringVar(value=f"{s.proxy_limit_month_mb:g}")
+        self._row(af, r, "…per month (MB, 0 = none)",
+                  ttk.Entry(af, textvariable=V["proxy_limit_month_mb"], width=8)); r += 1
+        V["proxy_price_per_gb"] = tk.StringVar(value=f"{s.proxy_price_per_gb:g}")
+        self._row(af, r, "Proxy price per GB ($, to show costs)",
+                  ttk.Entry(af, textvariable=V["proxy_price_per_gb"], width=8)); r += 1
         r = 0
         V["proxy"] = tk.StringVar(value=" ".join([s.proxy] + [str(x) for x in s.proxies]).strip())
         self._row(af, r, "Proxy (optional)", ttk.Entry(af, textvariable=V["proxy"], width=40), col=2); r += 1
@@ -166,6 +186,12 @@ class App:
         if s.proxy_file:
             hint += f"\nplus the proxies listed in {s.proxy_file} (config.toml)"
         ttk.Label(af, text=hint, foreground="gray").grid(row=r, column=3, sticky="w"); r += 1
+        use = ttk.Frame(af)
+        V["proxy_for_search"] = tk.BooleanVar(value=s.proxy_for_search)
+        V["proxy_for_transcripts"] = tk.BooleanVar(value=s.proxy_for_transcripts)
+        ttk.Checkbutton(use, text="searches", variable=V["proxy_for_search"]).pack(side="left")
+        ttk.Checkbutton(use, text="transcripts", variable=V["proxy_for_transcripts"]).pack(side="left", padx=6)
+        self._row(af, r, "Use the proxies for", use, col=2); r += 1
         V["cookies_from_browser"] = tk.StringVar(value=s.cookies_from_browser)
         self._row(af, r, "Cookies from browser", ttk.Combobox(af, textvariable=V["cookies_from_browser"],
                                                              values=["", "firefox", "chrome", "edge", "brave"],
@@ -174,7 +200,9 @@ class App:
         self._row(af, r, "YouTube API key", ttk.Entry(af, textvariable=V["api_key"], show="•", width=30),
                   col=2); r += 1
         self._advanced_open = False
-        for name in ("proxy", "cookies_from_browser", "api_key", "workers", "delay_seconds", "scan_per_keyword"):
+        for name in ("proxy", "cookies_from_browser", "api_key", "workers", "delay_seconds", "scan_per_keyword",
+                     "proxy_for_search", "proxy_for_transcripts", "proxy_limit_run_mb", "proxy_limit_month_mb",
+                     "data_saver"):
             V[name].trace_add("write", lambda *_: self._update_adv_summary())
         self._update_adv_summary()
 
@@ -185,8 +213,10 @@ class App:
         self.btn_run.pack(side="left")
         self.btn_search = ttk.Button(bf, text="Search only", command=lambda: self._start("search"))
         self.btn_search.pack(side="left", padx=4)
-        self.btn_list = ttk.Button(bf, text="Transcripts for links / a list…", command=lambda: self._start("list"))
+        self.btn_list = ttk.Button(bf, text="Links / a list…", command=lambda: self._start("list"))
         self.btn_list.pack(side="left")
+        self.btn_channel = ttk.Button(bf, text="Whole channels…", command=self._channels)
+        self.btn_channel.pack(side="left", padx=(4, 0))
         self.btn_stop = ttk.Button(bf, text="Stop", command=self._stop, state="disabled")
         self.btn_stop.pack(side="left", padx=4)
         ttk.Button(bf, text="Open output folder", command=self._open_output).pack(side="right")
@@ -209,6 +239,8 @@ class App:
         sb.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         sb.columnconfigure(0, weight=1)
         ttk.Label(sb, textvariable=self.status, anchor="w").grid(row=0, column=0, sticky="ew")
+        self.data_usage = tk.StringVar(value="")
+        ttk.Label(sb, textvariable=self.data_usage, anchor="e", foreground="gray").grid(row=0, column=3, padx=(8, 0))
         ttk.Label(sb, textvariable=self.phase, anchor="e").grid(row=0, column=1, padx=(8, 4))
         self.progress = ttk.Progressbar(sb, length=220, mode="determinate", maximum=1)
         self.progress.grid(row=0, column=2)
@@ -251,6 +283,16 @@ class App:
             bits.append(f"cookies from {V['cookies_from_browser'].get().strip()}")
         if V["api_key"].get().strip():
             bits.append("API key set")
+        if proxies and not (V["proxy_for_search"].get() and V["proxy_for_transcripts"].get()):
+            only = ("searches" if V["proxy_for_search"].get() else
+                    "transcripts" if V["proxy_for_transcripts"].get() else "nothing")
+            bits.append(f"proxies for {only} only")
+        lim = [x for x in (V["proxy_limit_run_mb"].get().strip(), V["proxy_limit_month_mb"].get().strip())
+               if x not in ("", "0")]
+        if proxies and lim:
+            bits.append("proxy data limit")
+        if proxies and V["data_saver"].get() in ("off", "max"):
+            bits.append(f"data saver {V['data_saver'].get()}")
         self.adv_summary.set(("In use: " + ", ".join(bits)) if bits else
                              "proxies, parallel downloads, cookies, API key, pause between videos")
 
@@ -283,6 +325,14 @@ class App:
             self.logbox.configure(state="disabled")
             self.status.set(lines[-1][10:][:140])
             self._update_progress(lines)
+        from . import netmeter
+
+        sess = netmeter.active()
+        if sess is not None and sess.enabled and sess.relays:
+            text = f"Proxy data: {netmeter.fmt_bytes(sess.meter.total)}"
+            if sess.meter.limit and not sess.meter.exhausted:
+                text += f" of {netmeter.fmt_bytes(sess.meter.limit)}"
+            self.data_usage.set(text)
         if finished and self.q.empty():
             self._set_running(False)
         self.root.after(150, self._drain_log)
@@ -299,8 +349,9 @@ class App:
                     self.progress.configure(maximum=1, value=0)
                 continue
             i, n = int(m.group(1)), int(m.group(2))
-            searching = m.group(3) == "Keyword:"
-            self.phase.set(f"{'Searching keyword' if searching else 'Transcripts'} {i}/{n}")
+            searching = m.group(3) in ("Keyword:", "Channel:")
+            what = {"Keyword:": "Searching keyword", "Channel:": "Listing channel"}.get(m.group(3), "Transcripts")
+            self.phase.set(f"{what} {i}/{n}")
             # a keyword's search is in progress while its line shows, so count it as half done
             self.progress.configure(maximum=n, value=(i - 0.5) if searching else i)
 
@@ -420,6 +471,14 @@ class App:
             "proxy": " ".join(V["proxy"].get().split()),
             "proxies": [],  # the field above holds the whole list
             "workers": V["workers"].get().strip() or "auto",
+            "max_views": num("max_views"),
+            "remove_filler_words": bool(V["remove_filler_words"].get()),
+            "data_saver": V["data_saver"].get().strip() or "auto",
+            "proxy_for_search": bool(V["proxy_for_search"].get()),
+            "proxy_for_transcripts": bool(V["proxy_for_transcripts"].get()),
+            "proxy_limit_run_mb": num("proxy_limit_run_mb", float, 0.0),
+            "proxy_limit_month_mb": num("proxy_limit_month_mb", float, 0.0),
+            "proxy_price_per_gb": num("proxy_price_per_gb", float, 0.0),
         }
 
     # ---- actions -------------------------------------------------------------------------
@@ -462,7 +521,7 @@ class App:
             return
         log.info("Settings saved to %s (run.bat uses them too).", self.config_path)
 
-    def _start(self, mode: str):
+    def _start(self, mode: str, channels: list[str] | None = None, extra: dict | None = None):
         from tkinter import filedialog, messagebox
 
         if self.worker and self.worker.is_alive():
@@ -497,12 +556,13 @@ class App:
                 filetypes=[("Video lists", "*.csv *.json *.txt"), ("All files", "*.*")])
             if not list_file:
                 return
-        elif mode != "list" and not build_settings(self._load_config(), values).all_keywords() \
-                and not self._load_config().get("keywords_file"):
+        elif mode not in ("list", "channel") and not build_settings(self._load_config(), values).all_keywords() \
+                and not self._load_config().get("keywords_file") and not self._load_config().get("channels"):
             messagebox.showwarning("No keywords", "Type at least one keyword (one per line).")
             return
         if mode == "search":
             values["download_transcripts"] = False
+        values.update(extra or {})
 
         cfg = self._load_config()
         kw_file = cfg.pop("keywords_file", None)
@@ -550,7 +610,8 @@ class App:
                               "try again when it has finished.")
                     return
                 log.addHandler(fh)
-                cli.cmd_run(s, transcripts_only_list=list_file, should_stop=self.stop_event.is_set)
+                cli.cmd_run(s, transcripts_only_list=list_file, should_stop=self.stop_event.is_set,
+                            channels=channels)
             except Exception as e:  # show any failure in the window instead of crashing
                 from .utils import short_error
 
@@ -566,6 +627,196 @@ class App:
         self.worker = threading.Thread(target=job, daemon=True)
         self.worker.start()
 
+    # ---- whole channels ---------------------------------------------------------------------
+    def _channels(self):
+        """Dialog: which channels, which tabs, how many - then run like the main button."""
+        from tkinter import messagebox
+
+        if self.worker and self.worker.is_alive():
+            return
+        tk, ttk = self.tk, self.ttk
+        cfg = self._load_config()
+        cs = build_settings(cfg)
+        win = tk.Toplevel(self.root)
+        win.title("Transcripts for whole channels")
+        win.transient(self.root)
+        frm = ttk.Frame(win, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Channels or playlists, one per line - an @handle, a channel link or a playlist "
+                            "link:").grid(row=0, column=0, columnspan=2, sticky="w")
+        box = tk.Text(frm, height=6, width=60, wrap="none", font=("Segoe UI", 10))
+        box.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=4)
+        box.insert("1.0", "\n".join(cs.channels))
+        tabs = ttk.Frame(frm)
+        tvars = {}
+        for key, label in (("videos", "Videos"), ("shorts", "Shorts"), ("streams", "Past live streams")):
+            tvars[key] = tk.BooleanVar(value=key in cs.channel_tabs)
+            ttk.Checkbutton(tabs, text=label, variable=tvars[key]).pack(side="left", padx=(0, 8))
+        self._row(frm, 2, "Include", tabs)
+        newest = tk.StringVar(value=str(cs.channel_max_videos))
+        self._row(frm, 3, "Newest per channel (0 = all)", ttk.Spinbox(frm, from_=0, to=100000, textvariable=newest,
+                                                                     width=8))
+        minv = tk.StringVar(value=str(cs.channel_min_views))
+        self._row(frm, 4, "Minimum views", ttk.Entry(frm, textvariable=minv, width=12))
+        within = tk.StringVar(value=WITHIN_LABELS.get(cs.channel_within, "Any time"))
+        self._row(frm, 5, "Uploaded", ttk.Combobox(frm, textvariable=within, values=list(WITHIN_LABELS.values()),
+                                                  state="readonly", width=14))
+        dl = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frm, text="Download the transcripts (untick for just the list)", variable=dl).grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        keep = tk.BooleanVar(value=bool(cs.channels))
+        ttk.Checkbutton(frm, text="Remember these channels and also check them on every \"Search + download\"",
+                        variable=keep).grid(row=7, column=0, columnspan=2, sticky="w")
+        ttk.Label(frm, text="Tip: with \"Uploaded: This week\" a daily scheduled run picks up each new upload.",
+                  foreground="gray").grid(row=8, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        btns = ttk.Frame(frm)
+        btns.grid(row=9, column=0, columnspan=2, sticky="e", pady=(10, 0))
+
+        def start():
+            from .channels import ChannelError, channel_url
+
+            specs = [x.strip() for x in box.get("1.0", "end").splitlines() if x.strip()]
+            if not specs:
+                messagebox.showwarning("No channel", "Add at least one channel (e.g. @mkbhd).", parent=win)
+                return
+            for sp in specs:
+                try:
+                    channel_url(sp)
+                except ChannelError as e:
+                    messagebox.showerror("Not a channel", str(e), parent=win)
+                    return
+            try:
+                n_new, n_min = int(newest.get() or 0), int(str(minv.get()).replace(",", "") or 0)
+            except ValueError:
+                messagebox.showerror("Check the numbers", "Newest and minimum views must be numbers.", parent=win)
+                return
+            extra = {
+                "channel_tabs": [k for k, v in tvars.items() if v.get()] or ["videos"],
+                "channel_max_videos": n_new, "channel_min_views": n_min,
+                "channel_within": {v: k for k, v in WITHIN_LABELS.items()}.get(within.get(), "any"),
+                "download_transcripts": bool(dl.get()),
+            }
+            if keep.get() or cs.channels:
+                try:
+                    save = dict(extra, channels=specs if keep.get() else [])
+                    save.pop("download_transcripts")
+                    self._ensure_config()
+                    update_config_file(self.config_path, save)
+                except (ConfigError, OSError) as e:
+                    messagebox.showerror("Not saved", str(e), parent=win)
+                    return
+            win.destroy()
+            self._start("channel", channels=specs, extra=extra)
+
+        ttk.Button(btns, text="Start", command=start).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right", padx=6)
+        win.grab_set()
+
+    def _ensure_config(self) -> None:
+        if not self.config_path.exists():  # not the example: its sample keywords would become active
+            self.config_path.write_text("# YouTube Transcript Tool settings (see config.example.toml for all "
+                                        "of them)\n", encoding="utf-8")
+
+    # ---- related keywords -------------------------------------------------------------------
+    def _related(self):
+        from tkinter import simpledialog
+
+        if self.worker and self.worker.is_alive():
+            return
+        typed = [k.strip() for k in self.keywords.get("1.0", "end").splitlines() if k.strip()]
+        try:
+            picked = self.keywords.get("sel.first", "sel.last").strip()
+        except self.tk.TclError:
+            picked = ""
+        seed = simpledialog.askstring("Find related keywords", "Find keywords related to:", parent=self.root,
+                                      initialvalue=picked or (typed[0] if typed else ""))
+        if not seed or not seed.strip():
+            return
+        try:
+            values = self.collect()
+        except ValueError:
+            values = {}
+        cfg = self._load_config()
+        cfg.pop("keywords_file", None)
+        s = build_settings(cfg, values)
+        s.keywords = typed
+        try:
+            from .proxies import resolve as resolve_proxies
+
+            resolve_proxies(s, PROJECT_DIR)
+        except ConfigError:
+            s.proxies, s.proxy = [], ""
+        s.output_dir = str(self._abs(s.output_dir))
+        result: dict = {}
+        self.stop_event.clear()
+        self._set_running(True)
+
+        def job():
+            from .cli import metered
+            from .related import find_related, save_related
+
+            try:
+                with metered(s, "related"):
+                    items = find_related([seed.strip()], s, should_stop=self.stop_event.is_set)
+                result["items"] = items
+                if items:
+                    txt, _ = save_related(items, Path(s.output_dir), [seed.strip()])
+                    log.info("Saved %d related keywords to %s", len(items), txt)
+            except Exception as e:  # noqa: BLE001
+                log.error("Finding related keywords failed: %s", e)
+
+        self.worker = threading.Thread(target=job, daemon=True)
+        self.worker.start()
+
+        def wait():
+            if self.worker.is_alive():
+                self.root.after(200, wait)
+            elif result.get("items"):
+                self._show_related(seed.strip(), result["items"])
+            elif "items" in result:
+                log.warning("No related keywords found for %r.", seed)
+        self.root.after(200, wait)
+
+    def _show_related(self, seed: str, items) -> None:
+        tk, ttk = self.tk, self.ttk
+        win = tk.Toplevel(self.root)
+        win.title(f"Related to \u201c{seed}\u201d")
+        win.transient(self.root)
+        frm = ttk.Frame(win, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Tick the ones to add to your keywords (best first):").pack(anchor="w")
+        canvas = tk.Canvas(frm, width=460, height=380, highlightthickness=0)
+        sbar = ttk.Scrollbar(frm, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sbar.set)
+        canvas.pack(side="left", fill="both", expand=True, pady=6)
+        sbar.pack(side="left", fill="y", pady=6)
+        checks = []
+        for r in items[:60]:
+            var = tk.BooleanVar(value=False)
+            ttk.Checkbutton(inner, text=f"{r.phrase}   ({' + '.join(sorted(r.sources))})",
+                            variable=var).pack(anchor="w")
+            checks.append((r.phrase, var))
+        side = ttk.Frame(win, padding=(0, 10, 10, 10))
+        side.pack(side="right", fill="y")
+
+        def add():
+            have = {k.strip().lower() for k in self.keywords.get("1.0", "end").splitlines() if k.strip()}
+            new = [p for p, v in checks if v.get() and p.lower() not in have]
+            if new:
+                text = self.keywords.get("1.0", "end").rstrip("\n")
+                self.keywords.delete("1.0", "end")
+                self.keywords.insert("1.0", (text + "\n" if text else "") + "\n".join(new))
+                log.info("Added %d keyword(s): %s - press Save settings to keep them.", len(new), ", ".join(new))
+            win.destroy()
+
+        ttk.Button(side, text="Add ticked to keywords", command=add).pack(fill="x")
+        ttk.Button(side, text="Tick top 10", command=lambda: [v.set(i < 10) for i, (_, v) in enumerate(checks)]
+                   ).pack(fill="x", pady=6)
+        ttk.Button(side, text="Close", command=win.destroy).pack(fill="x")
+
     def _stop(self):
         self.stop_event.set()
         log.warning("Stopping after the current video…")
@@ -573,7 +824,7 @@ class App:
     def _set_running(self, running: bool):
         self._running = running
         state = "disabled" if running else "normal"
-        for b in (self.btn_run, self.btn_search, self.btn_list):
+        for b in (self.btn_run, self.btn_search, self.btn_list, self.btn_channel, self.btn_related):
             b.configure(state=state)
         self.btn_stop.configure(state="normal" if running else "disabled")
         if running:
@@ -599,10 +850,13 @@ class App:
 
     def _open_list(self):
         p = self._abs(self.vars["output_dir"].get() or "output")
-        for name in ("video_list.html", "video_list.csv"):
-            if (p / name).exists():
-                _open_path(p / name)
-                return
+        pages = [p / n for n in ("video_list.html", "channel_list.html") if (p / n).exists()]
+        if pages:  # the most recent list, whether from a search or a channel run
+            _open_path(max(pages, key=lambda f: f.stat().st_mtime))
+            return
+        if (p / "video_list.csv").exists():
+            _open_path(p / "video_list.csv")
+            return
         log.info("No video list yet - run a search first.")
 
     def _on_close(self):
@@ -612,7 +866,7 @@ class App:
 
 
 # "23:10:01  [2/5] Keyword: 'x'" or "23:10:30  [7/18] OK    title" - only at the start of a log line
-_PROGRESS_RE = __import__("re").compile(r"^\S+\s+\[(\d+)/(\d+)\] (Keyword:|OK |skip |NONE |UNAV |BLOCK |FAIL |TOKEN)")
+_PROGRESS_RE = __import__("re").compile(r"^\S+\s+\[(\d+)/(\d+)\] (Keyword:|Channel:|OK |skip |NONE |UNAV |BLOCK |FAIL |TOKEN)")
 
 
 def show_startup_error(message: str, parent=None) -> None:

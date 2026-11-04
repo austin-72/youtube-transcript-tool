@@ -221,7 +221,8 @@ _NETWORK_HINTS = (
     "no address associated", "network is unreachable", "connection refused", "timed out",
     "temporary failure in name resolution", "connection aborted", "connection reset", "nodename nor servname",
     "winerror 10060", "winerror 10061", "winerror 10054", "winerror 10065", "winerror 11001",
-    "remote end closed connection",
+    "remote end closed connection", "tunnel connection failed", "connect tunnel failed",
+    "could not connect through the proxy", "proxy authentication required",
 )
 
 

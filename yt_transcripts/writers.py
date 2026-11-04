@@ -209,19 +209,44 @@ def _extract_id(s: str) -> str:
 MAX_PATH = 240  # Windows refuses paths over 260 characters unless long paths are enabled
 
 
-def transcript_basename(v: Video, max_len: int = 150) -> str:
-    """'2026-10-27 - Channel - Title [VIDEOID]', shortened (title first) to fit max_len."""
-    date = v.published[:10] if v.published else "unknown-date"
-    suffix = f" [{v.video_id}]"
-    channel = safe_filename(v.channel or "unknown channel", 40)
-    title = safe_filename(v.title or v.video_id, 90)
-    fixed = len(date) + 3 + 3 + len(suffix)
-    room = max(max_len - fixed, 8)
-    if len(channel) + len(title) > room:
-        title_room = max(room - min(len(channel), max(room // 3, 4)), 4)
-        title = safe_filename(title, title_room)
-        channel = safe_filename(channel, max(room - len(title), 4))
-    return f"{date} - {channel} - {title}{suffix}"
+DEFAULT_NAME = "{date} - {channel} - {title} [{id}]"
+
+
+def transcript_basename(v: Video, max_len: int = 150, template: str = DEFAULT_NAME,
+                        lang: str = "") -> str:
+    """The file name (without extension) from the file_name template, e.g. '2026-10-27 - Channel - Title
+    [VIDEOID]'. The video ID is always part of it (two videos can share a title); the title, then the
+    channel, are shortened to fit max_len."""
+    import re as _re
+
+    template = (template or DEFAULT_NAME).strip()
+    if "{id}" not in template:
+        template += " [{id}]"
+    fields = {
+        "date": v.published[:10] if v.published else "unknown-date",
+        "id": v.video_id,
+        "views": str(v.views) if v.views is not None else "",
+        "keyword": safe_filename((v.keyword.split("; ")[0] if v.keyword else ""), 40),
+        "lang": lang,
+        "channel": safe_filename(v.channel or "unknown channel", 40),
+        "title": safe_filename(v.title or v.video_id, 90),
+    }
+
+    def fill(f: dict) -> str:
+        out = _re.sub(r"{(\w+)}", lambda m: f.get(m.group(1), ""), template)
+        out = _re.sub(r"\s+", " ", out).strip(" -_.")
+        return safe_filename(out, 10_000) or v.video_id
+
+    name = fill(fields)
+    # too long: shorten the title (down to 8 characters), then the channel (down to 4)
+    for key, floor in (("title", 8), ("channel", 4)):
+        for _ in range(3):  # cutting can also drop a trailing space or dot, so re-check
+            excess = len(name) - max_len
+            if excess <= 0 or len(fields[key]) <= floor:
+                break
+            fields[key] = safe_filename(fields[key], max(len(fields[key]) - excess, floor))
+            name = fill(fields)
+    return name if len(name) <= max_len else v.video_id
 
 
 def transcript_folder(root: Path, v: Video, organize_by: str) -> Path:
@@ -230,17 +255,22 @@ def transcript_folder(root: Path, v: Video, organize_by: str) -> Path:
     if organize_by == "keyword":
         kw = (v.keyword.split("; ")[0] if v.keyword else "") or "no keyword"
         return root / safe_filename(kw, 50)
+    if organize_by == "month":
+        return root / (v.published[:7] if len(v.published) >= 7 else "unknown month")
     return root
 
 
 def write_transcript(v: Video, t: Transcript, folder: Path, formats: list[str],
-                     timestamps: bool = False, paragraph_seconds: int = 30, base: str = "") -> dict[str, Path]:
+                     timestamps: bool = False, paragraph_seconds: int = 30, base: str = "",
+                     template: str = DEFAULT_NAME, raw: Transcript | None = None) -> dict[str, Path]:
+    """Write the formats; `raw` (the uncleaned transcript) goes into the .json if given."""
     folder.mkdir(parents=True, exist_ok=True)
     longest_ext = max((len(f) for f in formats), default=4) + 1
     budget = MAX_PATH - len(str(folder.resolve())) - 1 - longest_ext - 4  # 4 = ".tmp"
     # if the folder itself is extremely deep, fall back to just the video ID
     if not base:
-        base = transcript_basename(v, max_len=min(150, budget)) if budget >= 36 else v.video_id
+        base = (transcript_basename(v, max_len=min(150, budget), template=template, lang=t.language)
+                if budget >= 36 else v.video_id)
     written: dict[str, Path] = {}
     for fmt in formats:
         path = folder / f"{base}.{fmt}"
@@ -253,7 +283,7 @@ def write_transcript(v: Video, t: Transcript, folder: Path, formats: list[str],
         elif fmt == "vtt":
             content = render_vtt(t)
         elif fmt == "json":
-            content = render_json(v, t)
+            content = render_json(v, raw or t)
         else:
             continue
         _atomic_write(path, content)

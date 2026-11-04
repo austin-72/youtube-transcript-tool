@@ -32,6 +32,9 @@ class Settings:
     # --- what to search -------------------------------------------------
     keywords: list[str] = field(default_factory=list)
     min_views: int = 10_000
+    max_views: int = 0  # skip videos with more views than this (0 = no maximum) - e.g. to find smaller creators
+    published_after: str = ""  # only videos uploaded on/after this date, e.g. "2026-10-01" (set within = "any")
+    published_before: str = ""  # ...and on/before this date
     rising_views_per_day: int = 0  # also keep videos below min_views that gain at least this many views/day (0 = off)
     within: str = "month"  # today | week | month | year | any
     max_age_days: float | None = None  # finer cut-off than `within` (optional)
@@ -55,6 +58,13 @@ class Settings:
     search_language: str = ""  # API search only: prefer results in this language, e.g. "en" ("" = no preference)
     keyword_settings: list[dict] = field(default_factory=list)  # per-keyword overrides
 
+    # --- whole channels (yt.py channel, the window's "Channels..." button, and `run` when listed here) ---
+    channels: list[str] = field(default_factory=list)  # "@handle", a channel link, a channel ID, or a playlist link
+    channel_tabs: list[str] = field(default_factory=lambda: ["videos"])  # any of videos, shorts, streams
+    channel_max_videos: int = 0  # newest N per channel (0 = all of them)
+    channel_min_views: int = 0
+    channel_within: str = "any"  # today | week | month | year | any
+
     # --- transcripts ------------------------------------------------------
     download_transcripts: bool = True
     languages: list[str] = field(default_factory=lambda: ["en"])
@@ -67,6 +77,8 @@ class Settings:
     formats: list[str] = field(default_factory=lambda: ["txt", "json"])
     txt_timestamps: bool = False
     strip_sound_tags: bool = False  # remove [Music], [Applause], (laughs) ... from the text
+    remove_filler_words: bool = False  # remove "um", "uh", "erm", "hmm" from the text
+    min_transcript_words: int = 0  # don't save transcripts shorter than this (music videos, intros); 0 = keep all
     paragraph_seconds: int = 30  # group plain-text output into paragraphs of ~N seconds
     combine: bool = True  # also write AI-ready combined Markdown files (one per keyword per run)
     combine_max_words: int = 80000  # split combined files into parts of at most this many words (0 = never)
@@ -75,7 +87,10 @@ class Settings:
 
     # --- output -----------------------------------------------------------
     output_dir: str = "output"
-    organize_by: str = "keyword"  # keyword | channel | flat
+    organize_by: str = "keyword"  # keyword | channel | month | flat
+    # transcript file names: {date} {channel} {title} {id} {views} {keyword} {lang}; [{id}] is added if missing
+    file_name: str = "{date} - {channel} - {title} [{id}]"
+    list_sort: str = "newest"  # order of video_list.csv: newest | views | views_per_day
     open_list_when_done: bool = False  # open video_list.html in the browser after a run
 
     # --- networking -------------------------------------------------------
@@ -94,6 +109,16 @@ class Settings:
     # yt-dlp --extractor-args, for fixes from the yt-dlp wiki/issues, e.g. ["youtube:player_client=default,-web"]
     ytdlp_extractor_args: list[str] = field(default_factory=list)
     videos_per_hour_per_ip: int = 200  # YouTube allows guests ~300 videos/h per IP; 0 = no cap
+    # which steps use the proxies: e.g. search on your own connection, transcripts through proxies
+    proxy_for_search: bool = True
+    proxy_for_transcripts: bool = True
+    # data used through proxies: counted on this PC (output/proxy_usage.json), with optional limits
+    proxy_meter: bool = True
+    proxy_limit_run_mb: float = 0.0  # stop starting new videos after this much proxy data in one run (0 = none)
+    proxy_limit_month_mb: float = 0.0  # ...or after this much in a calendar month, across runs (0 = none)
+    proxy_price_per_gb: float = 0.0  # your plan's price, to show costs (0 = don't show)
+    # fewer bytes per video: "auto" = on for downloads through proxies, "on", "off", or "max"
+    data_saver: str = "auto"
     js_runtimes: list[str] = field(default_factory=lambda: ["deno", "node"])
 
     verbose: bool = False
@@ -135,12 +160,18 @@ class Settings:
                 return s
         return self
 
-    def resolved_workers(self) -> int:
+    def stage_proxies(self, stage: str = "transcripts") -> list[str]:
+        """The proxies one step uses: "search" (searches, channel lists, related keywords) or
+        "transcripts" - [] means that step goes over your own connection."""
+        use = self.proxy_for_search if stage == "search" else self.proxy_for_transcripts
+        return list(self.proxies or ([self.proxy] if self.proxy else [])) if use else []
+
+    def resolved_workers(self, stage: str = "transcripts") -> int:
         """How many downloads run at once. Cookies force 1: one account seen from several IPs at once
         risks a ban, and yt-dlp would rewrite the cookie file from several places."""
         if self.cookies_file or self.cookies_from_browser:
             return 1
-        n_proxies = len(self.proxies or ([self.proxy] if self.proxy else []))
+        n_proxies = len(self.stage_proxies(stage))
         w = str(self.workers).strip().lower()
         if w == "auto":
             return min(n_proxies * max(1, int(self.workers_per_proxy or 1)), AUTO_WORKER_CAP) if n_proxies else 1
@@ -165,8 +196,9 @@ class Settings:
 
     def validate(self) -> list[str]:
         problems = []
-        if not self.all_keywords():
-            problems.append("No keywords given (use --keyword or the `keywords` list in config.toml).")
+        if not self.all_keywords() and not self.channels:
+            problems.append("No keywords given (use --keyword or the `keywords` list in config.toml, "
+                            "or list channels under `channels`).")
         if self.within not in (*WINDOW_DAYS, "any"):
             problems.append(f"within must be one of {', '.join([*WINDOW_DAYS, 'any'])} (got {self.within!r}).")
         if self.backend not in ("auto", "ytdlp", "api"):
@@ -210,8 +242,41 @@ class Settings:
                 parse_extractor_args(str(spec))
             except ValueError as e:
                 problems.append(f"ytdlp_extractor_args: {e}")
+        for name in ("published_after", "published_before"):
+            val = getattr(self, name)
+            if val and parse_day(val) is None:
+                problems.append(f"{name} must be a date like \"2026-10-01\" (got {val!r}).")
+        if self.max_views < 0:
+            problems.append("max_views cannot be negative (0 = no maximum).")
+        if self.max_views and self.max_views < self.min_views:
+            problems.append(f"max_views ({self.max_views:,}) is below min_views ({self.min_views:,}) - nothing "
+                            "could match.")
+        bad_tabs = set(self.channel_tabs) - {"videos", "shorts", "streams"}
+        if bad_tabs:
+            problems.append(f"channel_tabs can only hold videos, shorts and streams (got {sorted(bad_tabs)}).")
+        if self.channel_within not in (*WINDOW_DAYS, "any"):
+            problems.append(f"channel_within must be one of {', '.join([*WINDOW_DAYS, 'any'])}.")
+        if self.channel_max_videos < 0 or self.channel_min_views < 0:
+            problems.append("channel_max_videos and channel_min_views cannot be negative.")
+        if self.organize_by not in ("keyword", "channel", "month", "flat"):
+            problems.append("organize_by must be keyword, channel, month or flat.")
+        if self.list_sort not in ("newest", "views", "views_per_day"):
+            problems.append("list_sort must be newest, views or views_per_day.")
+        if self.min_transcript_words < 0:
+            problems.append("min_transcript_words cannot be negative.")
+        import re as _re
+
+        unknown = set(_re.findall(r"{(\w*)}", self.file_name or "")) - {
+            "date", "channel", "title", "id", "views", "keyword", "lang"}
+        if unknown or not (self.file_name or "").strip():
+            problems.append("file_name can use {date} {channel} {title} {id} {views} {keyword} {lang}"
+                            + (f" (unknown: {', '.join(sorted(unknown))})" if unknown else "") + ".")
         if self.combine_max_words < 0:
             problems.append("combine_max_words cannot be negative (0 = never split the combined files).")
+        if str(self.data_saver).lower() not in ("auto", "on", "off", "max"):
+            problems.append('data_saver must be "auto", "on", "off" or "max".')
+        if min(self.proxy_limit_run_mb, self.proxy_limit_month_mb, self.proxy_price_per_gb) < 0:
+            problems.append("proxy_limit_run_mb, proxy_limit_month_mb and proxy_price_per_gb cannot be negative.")
         if self.videos_per_hour_per_ip < 0:
             problems.append("videos_per_hour_per_ip cannot be negative (0 = no hourly cap).")
         if self.scan_per_keyword < 1:
@@ -233,6 +298,20 @@ class Settings:
             if bad:
                 problems.append(f"[[keyword_settings]] for {d['keyword']!r}: unknown sorts {sorted(bad)}.")
         return problems
+
+
+def parse_day(value: str):
+    """'2026-10-01' (also 2026/10/01 or 20261001) -> date, else None."""
+    import datetime as _dt
+    import re as _re
+
+    v = str(value or "").strip().replace("/", "-")
+    if _re.fullmatch(r"\d{8}", v):
+        v = f"{v[:4]}-{v[4:6]}-{v[6:]}"
+    try:
+        return _dt.date.fromisoformat(v)
+    except ValueError:
+        return None
 
 
 class ConfigError(Exception):

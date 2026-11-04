@@ -4,6 +4,8 @@
     python yt.py run -k "ai agents" -k "claude code" --min-views 50000 --within week
     python yt.py search -k "python tutorial"     # only build the list
     python yt.py transcripts output/video_list.csv   # transcripts for an existing list
+    python yt.py channel @mkbhd --max 50  # transcripts for a channel's newest 50 videos (0 = all)
+    python yt.py related "ai agents"      # find related keywords to search for
     python yt.py doctor                  # check that everything is installed and YouTube is reachable
 """
 
@@ -13,6 +15,7 @@ import argparse
 import datetime as dt
 import logging
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import __version__
@@ -47,12 +50,26 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--proxy-file", help="text file with one proxy per line; a blocked proxy is swapped "
                                              "for the next")
     _bool_flag(common, "open", "open the HTML video list when finished")
+    common.add_argument("--search-direct", dest="proxy_for_search", action="store_false", default=None,
+                        help="search over your own connection (proxies only for the transcripts)")
+    common.add_argument("--transcripts-direct", dest="proxy_for_transcripts", action="store_false", default=None,
+                        help="download transcripts over your own connection")
+    common.add_argument("--data-saver", choices=["auto", "on", "off", "max"],
+                        help="fewer bytes per video through proxies (default auto = on with proxies)")
+    common.add_argument("--data-limit", dest="proxy_limit_run_mb", type=float, metavar="MB",
+                        help="stop starting new videos after this much proxy data in this run")
+    common.add_argument("--month-limit", dest="proxy_limit_month_mb", type=float, metavar="MB",
+                        help="...or after this much proxy data in the current month")
 
     search_opts = argparse.ArgumentParser(add_help=False)
     g = search_opts.add_argument_group("search")
     g.add_argument("-k", "--keyword", dest="keyword_list", action="append", help="search term (repeatable)")
     g.add_argument("--keywords-file", help="text file with one search term per line")
     g.add_argument("-m", "--min-views", type=int, help="minimum view count (default 10000)")
+    g.add_argument("--max-views", type=int, help="skip videos with more views than this")
+    g.add_argument("--after", dest="published_after", metavar="DATE",
+                   help="only videos uploaded on/after this date, e.g. 2026-10-01")
+    g.add_argument("--before", dest="published_before", metavar="DATE", help="...and on/before this date")
     g.add_argument("--rising", dest="rising_views_per_day", type=int,
                    help="also keep videos under --min-views that get at least this many views per day")
     g.add_argument("-w", "--within", choices=["today", "week", "month", "year", "any"],
@@ -73,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("-l", "--lang", dest="languages", action="append", help="preferred transcript language (repeatable, default en)")
     t.add_argument("-f", "--format", dest="formats", action="append",
                    choices=["txt", "md", "srt", "vtt", "json"], help="output format (repeatable, default txt + json)")
-    t.add_argument("--organize-by", choices=["keyword", "channel", "flat"], help="folder layout for transcripts")
+    t.add_argument("--organize-by", choices=["keyword", "channel", "month", "flat"], help="folder layout for transcripts")
     t.add_argument("--methods", dest="transcript_methods", help="comma list, e.g. ytdlp or api,ytdlp")
     _bool_flag(t, "timestamps", "put [mm:ss] timestamps in the .txt files")
     _bool_flag(t, "allow-other-languages", "fall back to the video's own language if the preferred one is missing")
@@ -93,6 +110,27 @@ def build_parser() -> argparse.ArgumentParser:
     tp = sub.add_parser("transcripts", parents=[common, tr_opts], help="download transcripts for an existing list")
     tp.add_argument("list_file", nargs="+", metavar="LIST_OR_URL",
                     help="video_list.csv / .json, a .txt file of YouTube URLs or IDs, or the URLs/IDs themselves")
+    cp = sub.add_parser("channel", parents=[common, tr_opts],
+                        help="transcripts for every video of one or more channels (or playlists)")
+    cp.add_argument("channel_specs", nargs="*", metavar="CHANNEL",
+                    help="@handle, channel link, channel ID or playlist link (default: `channels` in config.toml)")
+    cp.add_argument("--tabs", dest="channel_tabs", help="comma list of videos, shorts, streams (default videos)")
+    cp.add_argument("-n", "--max", dest="channel_max_videos", type=int, help="newest N videos per channel (0 = all)")
+    cp.add_argument("-m", "--min-views", dest="channel_min_views", type=int, help="minimum views (default 0)")
+    cp.add_argument("-w", "--within", dest="channel_within", choices=["today", "week", "month", "year", "any"],
+                    help="only videos uploaded within this window (default any)")
+    cp.add_argument("--after", dest="published_after", metavar="DATE", help="only videos uploaded on/after this date")
+    cp.add_argument("--before", dest="published_before", metavar="DATE", help="...and on/before this date")
+    cp.add_argument("--min-duration", type=int, help="minimum length in seconds")
+    cp.add_argument("--max-duration", type=int, help="maximum length in seconds")
+    cp.add_argument("--list-only", action="store_true", help="only make the list, no transcripts")
+    rp = sub.add_parser("related", parents=[common], help="find related keywords to search for")
+    rp.add_argument("seeds", nargs="*", metavar="KEYWORD", help="keyword(s) to start from (default: your keywords)")
+    rp.add_argument("--max", dest="related_max", type=int, default=40, help="how many to show (default 40)")
+    rp.add_argument("--no-titles", dest="related_titles", action="store_false", default=True,
+                    help="don't run a YouTube search to mine video titles (suggestions only)")
+    rp.add_argument("--add", dest="related_add", type=int, default=0, metavar="N",
+                    help="add the top N to the keywords in config.toml")
     dp = sub.add_parser("doctor", parents=[common], help="check installation and connectivity")
     dp.add_argument("--video", default="dQw4w9WgXcQ", help="video ID to test transcript download with")
     sub.add_parser("gui", parents=[common], help="open the simple window interface")
@@ -117,8 +155,11 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         raise ConfigError(f"The settings file {args.config} does not exist.")
     config = load_config(cfg_path)
     ov = {k: v for k, v in vars(args).items() if v is not None}
-    for k in ("command", "config", "list_file", "keyword_list", "keywords_file", "video", "phrase", "max_hits"):
+    for k in ("command", "config", "list_file", "keyword_list", "keywords_file", "video", "phrase", "max_hits",
+              "channel_specs", "list_only", "seeds", "related_max", "related_titles", "related_add"):
         ov.pop(k, None)
+    if isinstance(ov.get("channel_tabs"), str):
+        ov["channel_tabs"] = [t.strip().lower() for t in ov["channel_tabs"].split(",") if t.strip()]
     if "open" in ov:
         ov["open_list_when_done"] = ov.pop("open")
     if "timestamps" in ov:
@@ -192,11 +233,35 @@ def _library(s: Settings, out: Path):
         return None
 
 
-def cmd_search(s: Settings, save: bool = True, should_stop=None):
-    from .search import run_search
+@contextmanager
+def metered(s: Settings, label: str):
+    """Count proxy data for this run (or join the run that's already counting) and report it at the end."""
+    from . import netmeter
+
+    if netmeter.active() is not None:
+        yield netmeter.active()
+        return
+    with netmeter.Session(s, label) as sess:
+        try:
+            yield sess
+        finally:
+            line = sess.summary()
+            if line:
+                log.info(line)
+
+
+def cmd_search(s: Settings, save: bool = True, should_stop=None, channels: list[str] | None = None):
+    with metered(s, "channels" if channels else "search"):
+        return _cmd_search(s, save, should_stop, channels)
+
+
+def _cmd_search(s: Settings, save: bool = True, should_stop=None, channels: list[str] | None = None):
+    from .search import rank_newest, run_search
     from .writers import write_video_list
 
     problems = s.validate()
+    if channels:  # `yt.py channel ...`: keywords aren't needed
+        problems = [p for p in problems if not p.startswith("No keywords")]
     if not problems:
         from .ytdlp_common import warn_if_stale
 
@@ -205,7 +270,28 @@ def cmd_search(s: Settings, save: bool = True, should_stop=None):
         for pr in problems:
             log.error(pr)
         return None, None
-    videos = run_search(s, should_stop=should_stop)
+    stem = "channel_list" if channels else "video_list"
+    if channels:
+        from .channels import run_channels
+
+        videos = run_channels(s, channels, should_stop=should_stop)
+    else:
+        videos = run_search(s, should_stop=should_stop) if s.all_keywords() else []
+        if s.channels and not (should_stop and should_stop()):
+            from .channels import run_channels
+
+            seen = {v.video_id: v for v in videos}
+            for v in run_channels(s, should_stop=should_stop):
+                if v.video_id in seen:
+                    seen[v.video_id].merge(v)
+                else:
+                    videos.append(v)
+            videos = rank_newest(videos)
+    from .search import sort_for_list
+
+    videos = sort_for_list(videos, s.list_sort)
+    global LAST_STEM
+    LAST_STEM = stem
     stamp = dt.datetime.now().strftime("%Y-%m-%d_%H%M")
     paths = None
     if save:
@@ -220,9 +306,9 @@ def cmd_search(s: Settings, save: bool = True, should_stop=None):
             log.info("%d of them are new since your last search.", n_new)
         from .report import search_summary
 
-        summary = search_summary(s)
-        write_video_list(videos, out / "lists", f"{stamp}_video_list", summary)
-        paths = write_video_list(videos, out, "video_list", summary)
+        summary = search_summary(s, channels)
+        write_video_list(videos, out / "lists", f"{stamp}_{stem}", summary)
+        paths = write_video_list(videos, out, stem, summary)
         global LAST_LIST_HTML
         LAST_LIST_HTML = paths["html"]
         _library(s, out)
@@ -232,6 +318,7 @@ def cmd_search(s: Settings, save: bool = True, should_stop=None):
 
 
 LAST_LIST_HTML: Path | None = None
+LAST_STEM = "video_list"
 
 _STAT_LABELS = {
     "ok": "transcripts saved", "skipped": "already done (skipped)", "no_transcript": "without captions",
@@ -239,7 +326,7 @@ _STAT_LABELS = {
     "error": "failed (will retry)", "left_for_next_run": "left for the next run",
     "po_token": "need a YouTube token (retried on a schedule)",
     "stopped_blocked": "run stopped early: YouTube blocking", "stopped_errors": "run stopped early: repeated errors",
-    "interrupted": "run interrupted",
+    "interrupted": "run interrupted", "stopped_data_limit": "run stopped: proxy data limit reached",
 }
 
 
@@ -309,7 +396,15 @@ def _load_list_args(items) -> tuple[list | None, str]:
     return videos, ", ".join(labels)
 
 
-def cmd_run(s: Settings, transcripts_only_list: str | None = None, should_stop=None) -> int:
+def cmd_run(s: Settings, transcripts_only_list: str | None = None, should_stop=None,
+            channels: list[str] | None = None) -> int:
+    label = "transcripts" if transcripts_only_list else "channels" if channels else "run"
+    with metered(s, label):
+        return _cmd_run(s, transcripts_only_list, should_stop, channels)
+
+
+def _cmd_run(s: Settings, transcripts_only_list: str | None = None, should_stop=None,
+             channels: list[str] | None = None) -> int:
     from .pipeline import download_all
     from .writers import write_video_list
 
@@ -333,16 +428,20 @@ def cmd_run(s: Settings, transcripts_only_list: str | None = None, should_stop=N
                 log.error(pr)
             return 2
     else:
-        videos, stamp = cmd_search(s, should_stop=should_stop)
+        videos, stamp = cmd_search(s, should_stop=should_stop, channels=channels)
         if videos is None:
             return 2
         if not videos:
-            log.warning("No videos matched. In config.toml (or the window) try a lower min_views, a wider "
-                        "within, or a bigger scan_per_keyword.")
+            if channels:
+                log.warning("No videos matched on those channels. Try channel_within = \"any\", a lower "
+                            "channel_min_views, or other channel_tabs.")
+            else:
+                log.warning("No videos matched. In config.toml (or the window) try a lower min_views, a wider "
+                            "within, or a bigger scan_per_keyword.")
             return 0
     if not s.download_transcripts and not transcripts_only_list:  # asking for transcripts overrides the setting
         if s.open_list_when_done and not transcripts_only_list:
-            _open_file(LAST_LIST_HTML or Path(s.output_dir) / "video_list.html")
+            _open_file(LAST_LIST_HTML or Path(s.output_dir) / f"{LAST_STEM}.html")
         return 0
     if should_stop and should_stop():
         return 130
@@ -352,14 +451,14 @@ def cmd_run(s: Settings, transcripts_only_list: str | None = None, should_stop=N
     if transcripts_only_list:
         write_video_list(videos, out / "lists", f"{stamp}_transcripts_list")
     else:
-        from .search import rank_newest
-
         from .report import search_summary
+        from .search import sort_for_list
 
-        videos = rank_newest(videos)  # exact dates learned while fetching may change the order
-        summary = search_summary(s)
-        write_video_list(videos, out / "lists", f"{stamp}_video_list", summary)
-        html = write_video_list(videos, out, "video_list", summary)["html"]
+        videos = sort_for_list(videos, s.list_sort)  # exact dates learned while fetching may change the order
+        summary = search_summary(s, channels)
+        stem = "channel_list" if channels else "video_list"
+        write_video_list(videos, out / "lists", f"{stamp}_{stem}", summary)
+        html = write_video_list(videos, out, stem, summary)["html"]
     lib = _library(s, out)
     summary = summarize_stats(stats)
     log.info("Done: %s", summary or "nothing to do")
@@ -489,6 +588,10 @@ def cmd_status(s: Settings) -> int:
     mf = out / "manifest.json"
     if not mf.exists():
         print(f"Nothing downloaded yet (looked in {out}).")
+        from .netmeter import usage_report
+
+        for line in usage_report(out, s):
+            print(line)
         return 0
     data = json.loads(mf.read_text(encoding="utf-8"))
     counts = Counter(rec.get("status", "?") for rec in data.values())
@@ -508,6 +611,13 @@ def cmd_status(s: Settings) -> int:
     retry = [rec for rec in data.values() if rec.get("status") in ("error", "blocked", "po_token")]
     for rec in retry[:5]:
         print(f"    to retry: {rec.get('title', '')[:60]}  ({rec.get('error', '')[:70]})")
+    from .netmeter import usage_report
+
+    usage = usage_report(out, s)
+    if usage:
+        print()
+        for line in usage:
+            print(line)
     print()
     return 0
 
@@ -542,7 +652,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         Path(s.output_dir).mkdir(parents=True, exist_ok=True)
         # only real runs replace last_run.log - doctor/status/find/gui must not erase the details of a failed run
-        runs = args.command in ("run", "search", "transcripts")
+        runs = args.command in ("run", "search", "transcripts", "channel")
         if runs:  # take the lock BEFORE touching last_run.log, so a busy run's log is never wiped
             from .utils import RunLock
 
@@ -574,6 +684,12 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_export(s)
         if args.command == "find":
             return cmd_find(s, args.phrase, args.max_hits)
+        if args.command == "related":
+            from .related import cmd_related
+
+            return cmd_related(s, args.seeds or s.all_keywords(), max_items=args.related_max,
+                               use_titles=args.related_titles, add=args.related_add,
+                               config_path=args.config or DEFAULT_CONFIG)
         if args.command == "gui":
             from .gui import launch
 
@@ -584,6 +700,15 @@ def main(argv: list[str] | None = None) -> int:
                 return 0 if videos is not None else 2
             if args.command == "transcripts":
                 return cmd_run(s, transcripts_only_list=args.list_file)
+            if args.command == "channel":
+                specs = list(args.channel_specs or s.channels)
+                if not specs:
+                    log.error("Which channel? e.g.  yt.py channel @mkbhd   (or list them under `channels` in "
+                              "config.toml)")
+                    return 2
+                if args.list_only:
+                    s.download_transcripts = False
+                return cmd_run(s, channels=specs)
             return cmd_run(s)
         finally:
             if lock:
@@ -594,7 +719,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:  # show a readable message; the full traceback goes to last_run.log
         log.debug("Unexpected error", exc_info=True)
         log.error("Stopped because of an error: %s", e)
-        if args.command in ("run", "search", "transcripts"):
+        if args.command in ("run", "search", "transcripts", "channel"):
             log.error("Details are in %s. If YouTube changed something, running update.bat usually fixes it.",
                       Path(s.output_dir) / "last_run.log")
         return 1

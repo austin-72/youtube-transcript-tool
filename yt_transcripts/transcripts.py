@@ -213,43 +213,128 @@ def _unplayable_error(e) -> FetchError:
     return FetchError(ERROR, f"video is unplayable ({short}) - will try another method")
 
 
+class _SaverHealth:
+    """Shared by every worker in a run: if the data saver misses captions that the full extraction then
+    finds, more than now and then, switch it off for the rest of the run (correct beats cheap)."""
+
+    def __init__(self) -> None:
+        self.lock = __import__("threading").Lock()
+        self.reset()
+
+    def reset(self) -> None:
+        self.hits = self.misses = self.no_caption_checks = self.no_caption_seen = 0
+        self.disabled = False
+
+    def check_no_captions(self) -> bool:
+        """Should a "no captions" answer from the data saver be double-checked with the full method?
+        The first 3 of a run, then every 10th - checking each one would double their cost."""
+        with self.lock:
+            self.no_caption_seen += 1
+            return self.no_caption_seen <= 3 or self.no_caption_seen % 10 == 0
+
+    def hit(self) -> None:
+        with self.lock:
+            self.hits += 1
+
+    def miss(self) -> None:
+        with self.lock:
+            self.misses += 1
+            if not self.disabled and self.misses >= 3 and self.misses * 10 > self.hits:
+                self.disabled = True
+                log.warning("    Data saver switched off for this run: it missed captions that the full method "
+                            "found (%d times). Set data_saver = \"off\" if this keeps happening.", self.misses)
+
+
+SAVER_HEALTH = _SaverHealth()
+
+
+def saver_profile(s: Settings) -> str:
+    """Which data-saver profile a fetcher with these settings uses (see ytdlp_common.SAVER_ARGS)."""
+    mode = str(getattr(s, "data_saver", "auto")).lower()
+    if mode == "off" or SAVER_HEALTH.disabled:
+        return "full"
+    if mode == "max":
+        # without the watch page YouTube lists no translation languages: machine translation needs lean
+        return "lean" if s.translate else "max"
+    if mode == "on" or (mode == "auto" and s.proxy):
+        return "lean"
+    return "full"
+
+
 class YtDlpFetcher:
     name = "ytdlp"
 
     def __init__(self, s: Settings, ydl_factory: Callable | None = None):
         self.settings = s
         self._factory = ydl_factory
-        self._ydl = None
+        self._ydls: dict[str, object] = {}
+        self._loggers: dict[str, object] = {}
         self._logger = None
+        self._ydl = None  # the instance used by the current attempt
+        self.profile = "full"
         self.last_info: dict | None = None
 
-    def _get_ydl(self):
-        if self._ydl is None:
+    def _get_ydl(self, profile: str = "full"):
+        if profile not in self._ydls:
             if self._factory:
-                self._ydl = self._factory()
+                try:
+                    self._ydls[profile] = self._factory(profile=profile)
+                except TypeError:  # a factory that doesn't know about profiles
+                    self._ydls[profile] = self._factory()
             else:
                 from .ytdlp_common import YdlLogger, make_ydl
 
-                self._logger = YdlLogger()
+                self._loggers[profile] = YdlLogger()
                 # The subtitle flags only make yt-dlp *report* captions it had to drop
                 # (e.g. for a missing PO token); nothing is downloaded with download=False.
-                self._ydl = make_ydl(self.settings, logger=self._logger,
-                                     writesubtitles=True, writeautomaticsub=True)
+                self._ydls[profile] = make_ydl(self.settings, logger=self._loggers[profile], profile=profile,
+                                               writesubtitles=True, writeautomaticsub=True)
+        self._logger = self._loggers.get(profile)
+        self._ydl = self._ydls[profile]
         return self._ydl
 
     def _warnings(self) -> list[str]:
         return list(self._logger.warnings) if self._logger else []
 
     def close(self) -> None:
-        if self._ydl is not None:
+        for ydl in self._ydls.values():
             try:
-                self._ydl.close()
+                ydl.close()
             except Exception:
                 pass
-            self._ydl = None
+        self._ydls.clear()
+        self._ydl = None
 
     def fetch(self, video: Video) -> Transcript:
-        ydl = self._get_ydl()
+        profile = saver_profile(self.settings)
+        if profile == "full":
+            return self._fetch(video, "full")
+        try:
+            t = self._fetch(video, profile)
+            SAVER_HEALTH.hit()
+            return t
+        except FetchError as e:
+            if e.status in (BLOCKED, UNAVAILABLE):
+                raise  # the full method would get the same answer
+            if e.status == NO_TRANSCRIPT:
+                wrong_language = "no transcript in" in str(e)
+                if wrong_language and profile != "max":
+                    raise  # same tracks with the full method ("max" may lack some, so it does re-check)
+                if not wrong_language and not SAVER_HEALTH.check_no_captions():
+                    raise
+            first = e
+            log.debug("    data saver found nothing (%s) - checking with the full method", e)
+        try:
+            t = self._fetch(video, "full")
+        except FetchError:
+            raise
+        if first.status in (NO_TRANSCRIPT, PO_TOKEN):
+            SAVER_HEALTH.miss()  # the saver missed captions the full method found
+        return t
+
+    def _fetch(self, video: Video, profile: str) -> Transcript:
+        ydl = self._get_ydl(profile)
+        self.profile = profile
         self.last_info = None
         if self._logger:
             self._logger.warnings.clear()
@@ -315,8 +400,9 @@ class YtDlpFetcher:
             have = ", ".join(sorted({t.lang for t in tracks if not t.translated})) or "none"
             raise FetchError(NO_TRANSCRIPT, f"no transcript in {self.settings.languages} (available: {have})")
 
+        order = SMALL_FIRST if profile != "full" else FULL_ORDER
         try:
-            segments = self._download_track(ydl, chosen.handle)
+            segments = self._download_track(ydl, chosen.handle, order)
         except FetchError as e:
             fallback = self._untranslated_fallback(tracks) if chosen.translated and e.status == BLOCKED else None
             if fallback is None:
@@ -324,7 +410,7 @@ class YtDlpFetcher:
             # YouTube rate-limits machine-translated captions on their own (yt-dlp #13831): keep the original
             log.debug("    translated captions refused (%s) - using the original language instead", e)
             chosen = fallback
-            segments = self._download_track(ydl, chosen.handle)
+            segments = self._download_track(ydl, chosen.handle, order)
         if not segments:
             raise FetchError(PO_TOKEN, "caption track downloaded but was empty (YouTube may require a PO token)")
         return Transcript(
@@ -347,10 +433,12 @@ class YtDlpFetcher:
         return t if t is not None and not t.translated else None
 
     @staticmethod
-    def _download_track(ydl, fmts: list[dict]) -> list[Segment]:
+    def _download_track(ydl, fmts: list[dict], order: tuple[str, ...] | None = None) -> list[Segment]:
         by_ext = {f.get("ext"): f for f in fmts if isinstance(f, dict) and isinstance(f.get("url"), str)}
         last_err: Exception | None = None
-        for ext, parser in (("json3", parse_json3), ("vtt", parse_vtt), ("srv1", parse_srv1)):
+        parsers = {"json3": parse_json3, "vtt": parse_vtt, "srv1": parse_srv1}
+        for ext in order or FULL_ORDER:
+            parser = parsers[ext]
             f = by_ext.get(ext)
             if not f:
                 continue
@@ -367,6 +455,12 @@ class YtDlpFetcher:
             status = BLOCKED if any(p in low for p in _BOT_PATTERNS) else ERROR
             raise FetchError(status, f"could not download caption file: {_first_line(last_err)}")
         return []
+
+
+# caption file formats, in the order tried: srv1 (plain timed text) is the smallest - often a third of
+# json3, which carries word-level timing we don't use - so the data saver asks for it first
+FULL_ORDER = ("json3", "vtt", "srv1")
+SMALL_FIRST = ("srv1", "json3", "vtt")
 
 
 def _subtitle_request(ydl, fmt: dict):
@@ -459,11 +553,15 @@ def parse_srv1(raw: str) -> list[Segment]:
         text = _clean(html.unescape(m.group(3)))  # srv1 is XML: unescape exactly once
         if text:
             out.append(Segment(float(m.group(1)), float(m.group(2) or 0), text))
-    return out
+    return _dedupe_rolling(out)
 
 
-_SOUND_TAG = re.compile(r"\[[^\]]{1,30}\]|\((?:music|laughs?|laughter|applause|inaudible|silence|"
-                        r"cheering|sighs?|coughs?)\)|♪+", re.I)
+_SOUND_WORDS = (r"music|applause|laughter|laughs?|laughing|cheering|cheers|inaudible|silence|sighs?|coughs?|"
+                r"foreign|noise|background noise|crosstalk|bleep|whistling|clapping|gasps?|groans?|chuckles?|"
+                r"sound effects?|indistinct chatter|upbeat music|dramatic music|music playing")
+# [Music], (laughs), [upbeat music]... but not "[3]", "[EU]" or "[sic]"-style text that's really content
+_SOUND_TAG = re.compile(rf"\[(?:{_SOUND_WORDS})\]|\((?:{_SOUND_WORDS})\)|"
+                        r"\[(?=[^\]]*(?-i:[a-z]))[A-Za-z][A-Za-z ,'&-]{3,29}\]|♪+", re.I)
 
 
 def strip_sound_tags(t: Transcript) -> Transcript:
@@ -473,6 +571,22 @@ def strip_sound_tags(t: Transcript) -> Transcript:
         text = re.sub(r"\s+", " ", _SOUND_TAG.sub(" ", sg.text)).strip()
         if text:
             segs.append(Segment(sg.start, sg.duration, text))
+    t.segments = segs
+    return t
+
+
+# lower case or Capitalised only: "UM" (a university) and "mm" (millimetres) are real words
+_FILLER = re.compile(r"(?<![\w'-])(?:[Uu]m+|[Uu]h+m*|[Ee]rm+|[Hh]m+)(?![\w'-])[,.]?")
+
+
+def remove_filler_words(t: Transcript) -> Transcript:
+    """Remove um, uh, erm, hmm (not words like "umbrella" or "hum"); drop segments that become empty."""
+    segs = []
+    for sg in t.segments:
+        text = re.sub(r"\s+([,.?!])", r"\1", re.sub(r"\s+", " ", _FILLER.sub(" ", sg.text))).strip(" ,")
+        if text:
+            segs.append(Segment(sg.start, sg.duration, text[:1].upper() + text[1:] if sg.text[:1].isupper()
+                                else text))
     t.segments = segs
     return t
 

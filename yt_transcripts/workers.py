@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
+from . import netmeter
 from . import transcripts as tr
 from .config import Settings
 from .models import Transcript, Video
@@ -167,7 +168,7 @@ class Engine:
     # -- one worker --------------------------------------------------------------------------------------
     def _fetchers_for(self, slot: Slot) -> list:
         ws = copy.copy(self.s)  # own copy: workers must never see each other's proxy
-        ws.proxy = slot.url
+        ws.proxy = netmeter.route(slot.url)  # through the data meter's relay, which counts the bytes
         return self.build_fetchers(ws, self.ydl_factory)
 
     @staticmethod
@@ -210,6 +211,11 @@ class Engine:
                         self.stop(self.pool.stopped or "interrupted")
                         break
                     fetchers = self._fetchers_for(slot)
+                sess = netmeter.active()
+                if slot.url and sess is not None and sess.limit_reached():
+                    self.jobs.put_back(job)
+                    self.stop("data_limit")
+                    break
                 if not self._within_budget(slot, own_starts):
                     self.jobs.put_back(job)
                     break
@@ -234,9 +240,10 @@ class Engine:
                                 slot.label, " - switching" if others else "")
                     self._close(fetchers)
                     self.pool.release(slot)
-                    slot, fetchers = None, None
+                    used, slot, fetchers = slot, None, None
                     job.requeues += 1
                     if job.requeues > len(self.pool.slots) + len(self.backoff) + 2:
+                        self._count(used)
                         self._emit(Result(job, None, status, msg, method))  # give this one up for now
                         self.jobs.done()
                     else:
@@ -245,6 +252,7 @@ class Engine:
 
                 if status in (tr.OK, tr.NO_TRANSCRIPT, tr.UNAVAILABLE, tr.PO_TOKEN):
                     self.pool.ok(slot)  # YouTube answered normally through this slot
+                self._count(slot)
                 self._emit(Result(job, t, status, msg, method, slot.label if slot.url else ""))
                 self.jobs.done()
                 if self.jobs.remaining() > 0 and not self.stopping():
@@ -258,6 +266,13 @@ class Engine:
             self._close(fetchers)
             if slot is not None:
                 self.pool.release(slot)
+
+    @staticmethod
+    def _count(slot: Slot | None) -> None:
+        """One finished video through a proxy (retries of the same video aren't counted again)."""
+        sess = netmeter.active()
+        if slot is not None and slot.url and sess is not None:
+            sess.count_video()
 
     def _within_budget(self, slot: Slot, own_starts) -> bool:
         per_hour = self.s.videos_per_hour_per_ip
