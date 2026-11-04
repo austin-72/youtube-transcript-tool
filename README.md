@@ -371,18 +371,6 @@ If the quota runs out mid-run, the tool switches to key-less search automaticall
 * **Python errors on setup** — you need Python 3.11+. Uninstalling old versions isn't necessary; `setup.bat`
   picks the newest it finds.
 
-## Publishing your copy to GitHub
-
-Double-click **`publish-to-github.bat`**. It commits everything that changed and pushes it to
-<https://github.com/austin-72/YouTubeTranscriptTool> (edit `REPO_URL` at the top of the file for your own
-repository). The commit message for each new version is already written at the top of the file; press
-Enter to use it or type your own. The first time it installs Git if needed (via winget), asks for your
-name and e-mail for the commit, and a browser window asks you to sign in to GitHub.
-
-Your own files are never published: `config.toml` (proxy passwords, API key), cookies, proxy lists,
-`keywords.txt` and the `output` folder are listed in `.gitignore`, and the script double-checks before
-it sends anything.
-
 ## How it works (for the curious)
 
 * Search: [yt-dlp](https://github.com/yt-dlp/yt-dlp)'s YouTube search with YouTube's own filter codes

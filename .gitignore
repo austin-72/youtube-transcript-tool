@@ -1,4 +1,5 @@
 # Your own settings and secrets - never published
+publish-to-github.bat
 config.toml
 config.toml.tmp
 proxies.txt
