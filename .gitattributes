@@ -1,0 +1,4 @@
+# Windows batch files and the start-here note keep their Windows line endings exactly as they are
+*.bat -text
+START\ HERE.txt -text
+*.png binary

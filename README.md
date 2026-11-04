@@ -1,9 +1,82 @@
 # YouTube Transcript Tool
 
-Searches YouTube for your keywords, keeps the **newest videos above a view threshold**, saves that
-list (CSV, JSON and a clickable HTML page), then **downloads every video's transcript** to your computer.
+**Turn YouTube into text your AI can read — fast.**
 
-No API key needed. (An optional free YouTube API key gives exact dates and true newest-first ordering.)
+An hour of video takes an hour to watch, but its transcript (about 9,000 words) takes an AI a few seconds
+to read. This tool is built for that kind of fast data consumption: it searches YouTube for your keywords
+(or takes whole channels and playlists), keeps the **newest videos above a view threshold**, and
+**downloads every transcript** to your computer — ready to drop into ChatGPT, Claude, Gemini, NotebookLM,
+Obsidian or your own scripts. Fifty new videos on your topic become one file you can ask questions of,
+every morning, without watching any of them.
+
+No API key needed. Runs on Windows with a double-click (works on macOS/Linux from the command line too).
+
+![The window: keywords and filters on the left, transcript options on the right, the run's log below](docs/screenshots/window.png)
+
+---
+
+## What it's for: YouTube → AI
+
+Every run gives you three kinds of files (all in the `output` folder):
+
+* **`combined\…md`** — one file per keyword with every transcript from the run, split into parts of at
+  most 80,000 words so each part fits an AI chat or a NotebookLM source. *Upload this one.*
+* **`transcripts\…`** — one file per video (`.txt`, `.md` with clickable timestamps, `.srt`/`.vtt`,
+  `.json` with every timed line) for note apps, search and your own code.
+* **`video_list.html` / `.csv`** — what was found: views, **views/day** (how fast it's growing),
+  **mentions** (how often the transcript really says your keyword), with links.
+
+Some ways to use it — each one is a setting or two plus a prompt:
+
+**1. A daily briefing on your niche.** Keywords for your field, `within = "today"` (or "week"), then
+`schedule_daily.bat`. Each morning, upload the newest file from `combined\` and ask:
+
+> These are transcripts of the most-watched new YouTube videos about *ai agents* from the last 24 hours.
+> Give me a briefing: the 10 most important new things (announcements, techniques, numbers), which video
+> said each one, and anything two videos disagree on. Skip intros, sponsors and calls to subscribe.
+
+**2. Learn a subject in an afternoon.** *Whole channels…* → paste a course playlist link (or a teacher's
+channel with *Newest per channel* = 30). Add the combined file to **NotebookLM** or a Claude project and ask:
+
+> Turn these lectures into a study guide: the key ideas in order, a one-paragraph explanation of each, the
+> examples the speaker used, and 15 quiz questions with answers. Note the video for each section.
+
+**3. Study a creator or a competitor.** Whole channel, *Uploaded: This year*, list sorted by views
+(`list_sort = "views"`). Give the AI the transcripts *and* `channel_list.csv`:
+
+> Using the transcripts and the view counts in the CSV: which topics does this channel return to most,
+> how did that change over the year, and what do their best-performing videos (views per day) have in
+> common in the first 60 seconds?
+
+**4. Find content gaps and new angles.** *Find related keywords…* to widen your keyword list, run it,
+then ask:
+
+> Across these videos, which questions are raised but never properly answered? Which subtopics appear in
+> only one or two videos? List 10 video ideas that would fill those gaps, each with a working title.
+
+**5. Pull exact quotes with timestamps.** Use the `.md` format: every paragraph starts with a link to that
+moment in the video, so the AI can cite it.
+
+> Find every claim about *context window size* in these transcripts. Quote it word for word and give the
+> timestamp link from the line it's on, so I can check it.
+
+Or search yourself, without AI: double-click `search_transcripts.bat` and type *context window* — every
+match comes with a link to the exact second.
+
+**6. Feed your own tools.** `yt.py export` writes every transcript into one `.jsonl` (one video per line,
+with metadata and timed segments) and one `.csv` — ready for embeddings, a vector database, a RAG
+chatbot or a spreadsheet. The `.md` files have properties at the top (title, channel, date, views,
+keywords) that **Obsidian** shows and searches, so the transcripts folder works as a vault.
+
+**7. Skip the clickbait.** Sort the list by **mentions**: a popular video whose transcript never says the
+words in its title is usually not worth your (or your AI's) time. Ask the AI:
+
+> For each video, does the transcript deliver what the title promises? Rate 1–5 with one sentence why.
+
+Tips: a part of up to 80,000 words is roughly 110,000 tokens, which fits Claude and ChatGPT's larger
+contexts and a NotebookLM source; lower `combine_max_words` for smaller ones. Ask the AI to name the video
+(and the timestamp, with `.md`) for every point so you can check it. Use the transcripts for your own
+research and respect the creators' work.
 
 ---
 
@@ -18,7 +91,13 @@ No API key needed. (An optional free YouTube API key gives exact dates and true 
 3. Open **`config.toml`** in Notepad: set your `keywords`, `min_views` and `within`. Save.
 4. Double-click **`run.bat`** — or **`gui.bat`** for a window where you can type everything instead.
 
-Your results appear in the **`output`** folder:
+Your results appear in the **`output`** folder. Open **`video_list.html`**:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/video_list_dark.png">
+  <img alt="The video list: thumbnails, titles, dates, views, views per day, keyword, mentions and a link to each transcript, with a preview of the first lines" src="docs/screenshots/video_list.png">
+</picture>
+
 
 ```
 output/
@@ -87,9 +166,13 @@ playlist links — or `run.bat` with `channels = ["@mkbhd"]` in config.toml, or
 "newest N" (0 = all), a minimum view count and how far back to go. The channel's transcripts get their own
 folder, and with *Uploaded: This week* plus the daily schedule you get each new upload automatically.
 
+<img alt="The Whole channels dialog: channels or playlists one per line, which tabs, newest per channel, minimum views and upload window" src="docs/screenshots/channels.png" width="514">
+
 **Not sure what to search for?** *Find related keywords…* (or `yt.py related "ai agents"`) asks YouTube
 what people type after your keyword, looks at which phrases the top videos' titles share, and at the tags
 of videos you've already downloaded — and shows a ranked list you can tick and add to your keywords.
+
+<img alt="Related keywords: a ranked list with checkboxes, showing where each one was found (suggested, in titles, tags)" src="docs/screenshots/related.png" width="495">
 
 **Just one video?** Double-click **`get_transcript.bat`** and paste its link (or several links) —
 or use *Links / a list…* in the window.
@@ -235,6 +318,10 @@ If the quota runs out mid-run, the tool switches to key-less search automaticall
   separated by spaces) and the tool switches to the next one as soon as YouTube blocks the current one.
   `host:port:user:pass` lists from proxy shops work as they are; `socks5://` works too.
   Run `update.bat` (or `yt.py doctor`) to test every proxy. Note the password is stored in config.toml.
+* **Where are the proxy settings?** In the window, under *Advanced settings* (closed until you open it;
+  the grey line next to the button tells you what's switched on):
+
+  ![Advanced settings: results to scan, pause, parallel downloads, data saver, proxy data limits and price; proxy, which steps use it, cookies and API key](docs/screenshots/advanced.png)
 * **Proxy data (how much, and limits)** — every byte that goes through your proxies is counted on your PC
   and added up per month in `output\proxy_usage.json`. The log shows it during and after each run
   ("Proxy data this run: 42 MB, about 0.5 MB per video, 1.3 GB this month"), the window shows it in the
@@ -283,6 +370,18 @@ If the quota runs out mid-run, the tool switches to key-less search automaticall
   unfinished videos are retried.
 * **Python errors on setup** — you need Python 3.11+. Uninstalling old versions isn't necessary; `setup.bat`
   picks the newest it finds.
+
+## Publishing your copy to GitHub
+
+Double-click **`publish-to-github.bat`**. It commits everything that changed and pushes it to
+<https://github.com/austin-72/YouTubeTranscriptTool> (edit `REPO_URL` at the top of the file for your own
+repository). The commit message for each new version is already written at the top of the file; press
+Enter to use it or type your own. The first time it installs Git if needed (via winget), asks for your
+name and e-mail for the commit, and a browser window asks you to sign in to GitHub.
+
+Your own files are never published: `config.toml` (proxy passwords, API key), cookies, proxy lists,
+`keywords.txt` and the `output` folder are listed in `.gitignore`, and the script double-checks before
+it sends anything.
 
 ## How it works (for the curious)
 

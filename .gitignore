@@ -1,0 +1,21 @@
+# Your own settings and secrets - never published
+config.toml
+config.toml.tmp
+proxies.txt
+*cookies*.txt
+keywords.txt
+.last_update
+
+# Results, logs and the private Python environment
+output/
+.venv/
+tools/
+*.log
+
+# Caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.tmp
