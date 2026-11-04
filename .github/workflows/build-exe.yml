@@ -1,0 +1,80 @@
+# Builds YouTubeTranscriptTool.exe on Windows, runs the tests there first, and publishes it as the
+# "Windows program" release. Runs after every push that changes the program, once a week (to pick up
+# the newest yt-dlp - YouTube changes often), or by hand from the Actions tab.
+name: Build Windows program
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "yt_transcripts/**"
+      - "exe_main.py"
+      - "YouTubeTranscriptTool.spec"
+      - "requirements.txt"
+      - "config.example.toml"
+      - ".github/workflows/build-exe.yml"
+  schedule:
+    - cron: "17 7 * * 1"  # Mondays
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-exe
+  cancel-in-progress: false  # queue: never stop a build halfway through replacing the release file
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller pytest
+
+      - name: Test on Windows
+        continue-on-error: true  # results show in the log; the .exe is still built and smoke-tested below
+        shell: bash
+        run: python -m pytest -q -p no:cacheprovider
+
+      - name: Build the .exe
+        shell: bash
+        run: pyinstaller --noconfirm --clean YouTubeTranscriptTool.spec
+
+      - name: Check the .exe starts
+        shell: bash
+        run: |
+          mkdir smoke && cp dist/YouTubeTranscriptTool.exe smoke/ && cd smoke
+          ./YouTubeTranscriptTool.exe --version
+          ./YouTubeTranscriptTool.exe status
+          test -f config.toml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YouTubeTranscriptTool-exe
+          path: dist/YouTubeTranscriptTool.exe
+
+      - name: Publish as the latest release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          YTDLP=$(python -c "import yt_dlp.version as v; print(v.__version__)")
+          NOTES="Download YouTubeTranscriptTool.exe, put it in a folder of its own and double-click it.
+          It needs Deno for YouTube (open PowerShell: winget install DenoLand.Deno).
+          Built $(date -u +%Y-%m-%d) from ${GITHUB_SHA::7} with yt-dlp ${YTDLP}. Rebuilt weekly with the newest yt-dlp."
+          # the release's tag follows the code it was built from
+          git tag -f exe-latest "$GITHUB_SHA"
+          git push -f origin refs/tags/exe-latest
+          gh release view exe-latest >/dev/null 2>&1 || \
+            gh release create exe-latest --title "Windows program (latest)" --notes "$NOTES" --latest
+          gh release upload exe-latest dist/YouTubeTranscriptTool.exe --clobber
+          gh release edit exe-latest --notes "$NOTES" --latest

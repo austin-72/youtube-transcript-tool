@@ -15,7 +15,7 @@ from .config import ConfigError, build_settings, update_config_file
 from .config import load_config as _load_config_file
 
 log = logging.getLogger("yt_transcripts")
-PROJECT_DIR = Path(__file__).resolve().parent.parent
+from .paths import APP_DIR as PROJECT_DIR  # noqa: E402
 
 WITHIN_LABELS = {"today": "Today", "week": "This week", "month": "This month", "year": "This year", "any": "Any time"}
 MISSING_LABELS = {
@@ -128,9 +128,16 @@ class App:
         self._row(tf, r, "Save as", fmt_frame); r += 1
         V["txt_timestamps"] = tk.BooleanVar(value=s.txt_timestamps)
         ttk.Checkbutton(tf, text="Timestamps in .txt files", variable=V["txt_timestamps"]).grid(row=r, column=1, sticky="w"); r += 1
+        self._sb_cats = list(s.sponsorblock) or ["sponsor", "selfpromo", "interaction"]
+        V["sponsorblock_on"] = tk.BooleanVar(value=bool(s.sponsorblock))
+        ttk.Checkbutton(tf, text="Cut sponsor reads & subscribe reminders (SponsorBlock)",
+                        variable=V["sponsorblock_on"]).grid(row=r, column=1, sticky="w"); r += 1
         V["remove_filler_words"] = tk.BooleanVar(value=s.remove_filler_words)
         ttk.Checkbutton(tf, text="Remove um / uh / hmm", variable=V["remove_filler_words"]).grid(
             row=r, column=1, sticky="w"); r += 1
+        V["top_comments"] = tk.StringVar(value=str(s.top_comments))
+        self._row(tf, r, "Top comments per video", ttk.Spinbox(tf, from_=0, to=100, textvariable=V["top_comments"],
+                                                              width=6)); r += 1
         V["combine"] = tk.BooleanVar(value=s.combine)
         ttk.Checkbutton(tf, text="Also make AI-ready combined files", variable=V["combine"]).grid(row=r, column=1, sticky="w"); r += 1
         V["organize_by"] = tk.StringVar(value=s.organize_by)
@@ -250,6 +257,11 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         root.after(100, self._drain_log)
         log.info("Settings loaded from %s", config_path if config_path.exists() else "defaults")
+        from .ytdlp_common import js_runtime_options
+
+        if not js_runtime_options(s):
+            log.warning("Deno isn't installed - YouTube needs it for most videos. Install it once: open "
+                        "PowerShell and run  winget install DenoLand.Deno  then restart this window.")
         self._log_summary(Path(V["output_dir"].get()))
 
     # ---- helpers -------------------------------------------------------------------
@@ -472,6 +484,8 @@ class App:
             "proxies": [],  # the field above holds the whole list
             "workers": V["workers"].get().strip() or "auto",
             "max_views": num("max_views"),
+            "sponsorblock": list(self._sb_cats) if V["sponsorblock_on"].get() else [],
+            "top_comments": num("top_comments"),
             "remove_filler_words": bool(V["remove_filler_words"].get()),
             "data_saver": V["data_saver"].get().strip() or "auto",
             "proxy_for_search": bool(V["proxy_for_search"].get()),
@@ -512,7 +526,9 @@ class App:
             pass
         try:
             if not self.config_path.exists():
-                example = PROJECT_DIR / "config.example.toml"
+                from .paths import resource
+
+                example = resource("config.example.toml")
                 if example.exists():
                     self.config_path.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
             update_config_file(self.config_path, values)

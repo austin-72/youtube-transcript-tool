@@ -78,9 +78,60 @@ contexts and a NotebookLM source; lower `combine_max_words` for smaller ones. As
 (and the timestamp, with `.md`) for every point so you can check it. Use the transcripts for your own
 research and respect the creators' work.
 
+### Let Claude read the folder itself (Claude Code or Claude Desktop)
+
+Instead of uploading files, you can let an AI assistant on your PC open the `output` folder and look
+things up across *everything* you've collected, reading only what it needs. After every run the tool
+writes a **`CLAUDE.md`** (and the same text as `AGENTS.md`) into the output folder: a short map of what's
+where, which keywords and channels you follow, and how to search the files cheaply. Claude Code reads it
+automatically when started in that folder, so it knows the layout from the first question.
+
+**Claude Code** (needs a Claude subscription or API account):
+
+1. Install it once: open PowerShell and run `irm https://claude.ai/install.ps1 | iex`
+   (or `winget install Anthropic.ClaudeCode`).
+2. Open a terminal in your output folder and start it:
+   ```
+   cd "C:\Users\you\Documents\YouTubeTranscriptTool\output"
+   claude
+   ```
+3. Ask away:
+   > What did this week's *ai agents* videos say about memory? Quote the best three explanations with
+   > their timestamp links.
+
+   > Which channels in video_list.csv grew fastest (views per day), and what do their transcripts have
+   > in common?
+
+   > Compare how the three newest *local llm setup* videos install the model. Make a table.
+
+**Claude Desktop:** add the *Filesystem* extension (Settings → Desktop app → Extensions → Manage) and
+give it your output folder. Then ask the same kind of questions; point it to the folder's `CLAUDE.md`
+first ("read CLAUDE.md in my transcripts folder, then…").
+
+Tips: keep asking in the same folder and Claude builds on what it found; for very broad questions,
+ask it to start from the newest file in `combined/`. If you edit `CLAUDE.md` yourself, delete its first
+line and the tool will leave your version alone.
+
 ---
 
 ## Quick start (Windows)
+
+**Easiest: the one-file program.** No Python needed.
+
+1. Download **`YouTubeTranscriptTool.exe`** from the
+   [latest release](https://github.com/austin-72/YouTubeTranscriptTool/releases/latest) and put it in a
+   folder of its own (for example `Documents\YouTubeTranscriptTool`). It keeps `config.toml` and the
+   `output` folder next to itself.
+2. Install **Deno** once (YouTube needs it): open PowerShell and run `winget install DenoLand.Deno`.
+3. Double-click the `.exe`. The window opens; type your keywords and press *Search + download*.
+
+Windows may warn that the program is unrecognised (it isn't code-signed): click *More info* →
+*Run anyway*. It's rebuilt every week with the newest yt-dlp — when YouTube changes something, just
+download it again. The same file works from the command line (`YouTubeTranscriptTool.exe run -k "ai agents"`,
+any command from *Command line* below), and `YouTubeTranscriptTool.exe schedule 08:00` sets up a daily
+run (`unschedule` removes it). To build it yourself: `setup.bat`, then `build_exe.bat`.
+
+**Or run it from the source** (easy to update with `update.bat`, and needed for the `.bat` helpers):
 
 1. **Python 3.11 or newer** is needed. If you're not sure, just do step 2 — if Python is missing,
    setup offers to install it for you (via winget). To do it by hand: get it from
@@ -104,6 +155,7 @@ output/
 ├── video_list.html        ← open this: sortable list with thumbnails and links to each transcript
 ├── video_list.csv         ← same list for Excel
 ├── library.html           ← every video from every run so far, with its transcript
+├── trends.html            ← per keyword over time: new videos per day, attention, fastest risers
 ├── video_list.json
 ├── transcripts/
 │   └── ai agents/                                   (one folder per keyword)
@@ -111,6 +163,7 @@ output/
 │       └── 2026-10-27 - Some Channel - Video title [VIDEO_ID].json
 ├── combined/transcripts_2026-10-28_2315 - ai agents.md   ← AI-ready: a keyword's transcripts in one file
 ├── lists/                 ← a dated copy of every list you've made
+├── CLAUDE.md / AGENTS.md  ← a map of this folder for Claude Code and other AI assistants
 ├── manifest.json          ← remembers what's done, so re-runs skip finished videos
 └── last_run.log
 ```
@@ -159,6 +212,16 @@ and videos no earlier search had found get a **NEW** badge in the list. (Tick an
 `txt_timestamps`, `strip_sound_tags` or `paragraph_seconds`, and the files are rebuilt from the saved `.json`
 copies — nothing is downloaded again. Keep `json` in `formats` for this.)
 If YouTube changes something and it stops working, double-click **`update.bat`**.
+
+**What's heating up?** Open **`trends.html`**: for each keyword, how many new videos appear per day and
+how much attention (views per day) the matching videos get, plus the fastest-rising videos of the latest
+run. It's built from your dated lists, so it fills in as you run the tool on more days (the daily
+schedule is ideal).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/trends_dark.png">
+  <img alt="Keyword trends: line charts of new videos per day and views per day for each keyword, with a hover readout" src="docs/screenshots/trends.png">
+</picture>
 
 **Every video of a channel?** In the window press *Whole channels…* and paste `@handle`s, channel links or
 playlist links — or `run.bat` with `channels = ["@mkbhd"]` in config.toml, or
@@ -236,6 +299,9 @@ transcript it also learns the exact upload date and the list is updated. For exa
 | `max_views` | Skip videos with more views than this — e.g. 50,000 to find smaller creators (0 = no maximum). |
 | `published_after`, `published_before` | Only videos uploaded in a date range, e.g. `"2026-10-01"` (with `within = "any"` if it's older than the window). |
 | `channels`, `channel_tabs`, `channel_max_videos`, `channel_min_views`, `channel_within` | Whole channels or playlists (see *Every video of a channel?* above). |
+| `sponsorblock` | Cut these [SponsorBlock](https://sponsor.ajay.app) parts out of the text — default `["sponsor", "selfpromo", "interaction"]` (sponsor reads, self-promotion, "like and subscribe"); also `intro`, `outro`, `preview`, `filler`, `music_offtopic`, `hook`. `[]` = off. One small lookup per video over your own connection (no proxy data); the `.json` keeps the full text. |
+| `top_comments` | Also save the N most-liked comments of each video (0 = off). About two extra requests per video, so it costs some proxy data. |
+| `skip_duplicates` | Leave transcripts that repeat another video's text (clips, re-uploads) out of the AI files; marked *repeat* in the list (on by default). |
 | `remove_filler_words` | Remove "um", "uh", "erm", "hmm" from the text. |
 | `min_transcript_words` | Don't keep transcripts shorter than this (music videos, short intros). |
 | `organize_by` | Transcript folders by `keyword`, `channel`, `month` (of upload) or `flat`. |

@@ -38,11 +38,24 @@ def _fail(msg: str) -> None:
     print(f"  [FAIL] {msg}")
 
 
+_MODULES = {"yt-dlp": ("yt_dlp.version", "__version__"), "youtube-transcript-api": ("youtube_transcript_api", ""),
+            "yt-dlp-ejs": ("yt_dlp_ejs", "version"), "requests": ("requests", "__version__")}
+
+
 def _version(pkg: str) -> str | None:
     try:
         return md.version(pkg)
     except md.PackageNotFoundError:
+        pass
+    # the one-file .exe carries the modules without their package records: ask the module itself
+    mod, attr = _MODULES.get(pkg, (pkg.replace("-", "_"), "__version__"))
+    try:
+        import importlib
+
+        m = importlib.import_module(mod)
+    except Exception:
         return None
+    return str(getattr(m, attr, "") or getattr(m, "__version__", "") or "bundled")
 
 
 def run_doctor(s: Settings, test_video: str = "dQw4w9WgXcQ") -> int:
@@ -222,8 +235,12 @@ def run_doctor(s: Settings, test_video: str = "dQw4w9WgXcQ") -> int:
 
 
 def init_config(project_dir: Path) -> int:
+    from .paths import resource
+
     target = project_dir / "config.toml"
     example = project_dir / "config.example.toml"
+    if not example.exists():
+        example = resource("config.example.toml")
     if target.exists():
         print(f"{target} already exists - not overwriting.")
         return 0

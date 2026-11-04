@@ -132,3 +132,23 @@ def test_json_keeps_the_original_text_when_cleaning(tmp_path, monkeypatch):
     s2 = build_settings(base)
     pipeline.download_all([Video("vid00000001", title="T", keyword="k")], s2)
     assert "[Music] um hello there" in next(folder.glob("*.txt")).read_text(encoding="utf-8")
+
+
+def test_schedule_command_for_exe_and_scripts(tmp_path):
+    from pathlib import Path
+
+    from yt_transcripts import cli
+
+    exe = r"C:\Tools\YT's\YouTubeTranscriptTool.exe"
+    cmd = cli.schedule_command("7:05", True, Path(r"C:\Tools\YT's"), exe)
+    ps = cmd[-1]
+    assert cmd[0] == "powershell" and "-Execute '\"C:\\Tools\\YT''s\\YouTubeTranscriptTool.exe\"' -Argument 'run'" in ps
+    curly = cli.schedule_command("08:00", True, Path("C:/x"), "C:\\Bob\u2019s tools\\a.exe")[-1]
+    assert "Bob\u2019\u2019s" in curly
+    assert "-At '07:05'" in ps and "StartWhenAvailable" in ps
+    assert "run_scheduled.bat" in cli.schedule_command("23:59", False, tmp_path, "python")[-1]
+    assert cli.schedule_command("25:00", True, tmp_path, exe) is None
+    assert cli.schedule_command("noon", True, tmp_path, exe) is None
+    assert "Unregister-ScheduledTask" in cli.schedule_command(None, True, tmp_path, exe)[-1]
+    calls = []
+    assert cli.cmd_schedule("08:00", runner=lambda c: calls.append(c) or 0) == 0 and calls

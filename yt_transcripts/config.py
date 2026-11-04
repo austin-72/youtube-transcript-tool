@@ -79,6 +79,11 @@ class Settings:
     strip_sound_tags: bool = False  # remove [Music], [Applause], (laughs) ... from the text
     remove_filler_words: bool = False  # remove "um", "uh", "erm", "hmm" from the text
     min_transcript_words: int = 0  # don't save transcripts shorter than this (music videos, intros); 0 = keep all
+    # cut these SponsorBlock categories out of the text (one tiny lookup per video, own connection; [] = off):
+    # sponsor, selfpromo, interaction, intro, outro, preview, filler, music_offtopic, hook
+    sponsorblock: list[str] = field(default_factory=lambda: ["sponsor", "selfpromo", "interaction"])
+    top_comments: int = 0  # also save the N most-liked comments of each video (0 = off; ~2 extra requests)
+    skip_duplicates: bool = True  # leave clips/re-uploads whose text repeats another video out of combined files
     paragraph_seconds: int = 30  # group plain-text output into paragraphs of ~N seconds
     combine: bool = True  # also write AI-ready combined Markdown files (one per keyword per run)
     combine_max_words: int = 80000  # split combined files into parts of at most this many words (0 = never)
@@ -262,6 +267,13 @@ class Settings:
             problems.append("organize_by must be keyword, channel, month or flat.")
         if self.list_sort not in ("newest", "views", "views_per_day"):
             problems.append("list_sort must be newest, views or views_per_day.")
+        from .sponsorblock import CATEGORIES as _SB
+
+        bad_sb = set(self.sponsorblock) - set(_SB)
+        if bad_sb:
+            problems.append(f"sponsorblock can hold {', '.join(_SB)} (got {sorted(bad_sb)}).")
+        if not 0 <= self.top_comments <= 100:
+            problems.append("top_comments must be between 0 (off) and 100.")
         if self.min_transcript_words < 0:
             problems.append("min_transcript_words cannot be negative.")
         import re as _re

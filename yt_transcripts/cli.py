@@ -23,7 +23,7 @@ from .config import Settings, build_settings, load_config, read_keywords_file
 from .utils import format_duration, setup_logging
 
 log = logging.getLogger("yt_transcripts")
-PROJECT_DIR = Path(__file__).resolve().parent.parent
+from .paths import APP_DIR as PROJECT_DIR  # noqa: E402 - next to yt.py, or next to the .exe
 DEFAULT_CONFIG = PROJECT_DIR / "config.toml"
 
 
@@ -140,6 +140,9 @@ def build_parser() -> argparse.ArgumentParser:
     fp = sub.add_parser("find", parents=[common], help="search the downloaded transcripts for words or a phrase")
     fp.add_argument("phrase", help='what to look for, e.g. "context window"')
     fp.add_argument("--max", dest="max_hits", type=int, default=200, help="stop after this many matches")
+    sp = sub.add_parser("schedule", help="Windows: run every day at a set time (a scheduled task)")
+    sp.add_argument("at", nargs="?", default="08:00", help="time of day, 24-hour HH:MM (default 08:00)")
+    sub.add_parser("unschedule", help="Windows: remove the daily scheduled task")
     sub.add_parser("init", help="create config.toml from the example")
     up = sub.add_parser("selfupdate", help="update yt-dlp and youtube-transcript-api (used by the daily task)")
     up.add_argument("--if-older-than", type=float, default=0, metavar="DAYS",
@@ -227,10 +230,23 @@ def _library(s: Settings, out: Path):
     from .writers import write_library
 
     try:
-        return write_library(out, s)
+        lib = write_library(out, s)
     except Exception as e:  # noqa: BLE001
         log.debug("library.html not updated: %s", e)
-        return None
+        lib = None
+    try:
+        from .trends import write_trends
+
+        write_trends(out)
+    except Exception as e:  # noqa: BLE001
+        log.debug("trends.html not updated: %s", e)
+    try:
+        from .ai_guide import write_ai_guide
+
+        write_ai_guide(out, s)
+    except Exception as e:  # noqa: BLE001
+        log.debug("CLAUDE.md not updated: %s", e)
+    return lib
 
 
 @contextmanager
@@ -338,10 +354,82 @@ def summarize_stats(stats) -> str:
     return ", ".join(parts)
 
 
+TASK_NAME = "YouTube Transcript Tool"
+
+
+def schedule_command(at: str | None, frozen: bool, app_dir: Path, exe: str) -> list[str] | None:
+    """The PowerShell command that creates (at = "HH:MM") or removes (at = None) the daily task."""
+    import re
+
+    if at is not None:
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})", at.strip())
+        if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+            return None
+        at = f"{int(m.group(1)):02d}:{m.group(2)}"
+
+    def q(text: str) -> str:  # a PowerShell single-quoted string (it also ends at typographic quotes)
+        out = str(text)
+        for c in "'\u2018\u2019\u201a\u201b":
+            out = out.replace(c, c + c)
+        return "'" + out + "'"
+
+    def quoted_path(p) -> str:  # the program path in double quotes, as Task Scheduler needs for spaces
+        return q(f'"{p}"')
+    if at is None:
+        ps = f"Unregister-ScheduledTask -TaskName {q(TASK_NAME)} -Confirm:$false -ErrorAction Stop"
+    else:
+        if frozen:
+            action = f"New-ScheduledTaskAction -Execute {quoted_path(exe)} -Argument 'run' -WorkingDirectory {q(app_dir)}"
+        else:
+            action = (f"New-ScheduledTaskAction -Execute {quoted_path(app_dir / 'run_scheduled.bat')} "
+                      f"-WorkingDirectory {q(app_dir)}")
+        ps = (f"$a = {action}; $t = New-ScheduledTaskTrigger -Daily -At {q(at)}; "
+              "$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+              "-StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 8); "
+              f"Register-ScheduledTask -TaskName {q(TASK_NAME)} -Action $a -Trigger $t -Settings $s -Force "
+              "-ErrorAction Stop | Out-Null")
+    return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps]
+
+
+def cmd_schedule(at: str | None, runner=None) -> int:
+    """Create or remove the daily Windows scheduled task (the .exe's version of schedule_daily.bat)."""
+    import subprocess
+
+    from .paths import APP_DIR, FROZEN
+
+    if sys.platform != "win32" and runner is None:
+        print("Scheduling is for Windows. On macOS/Linux add a cron job:  0 8 * * *  cd <folder> && python3 yt.py run")
+        return 2
+    cmd = schedule_command(at, FROZEN, APP_DIR, sys.executable)
+    if cmd is None:
+        print(f"{at!r} isn't a time - use 24-hour HH:MM, e.g. 07:30")
+        return 2
+    rc = (runner or subprocess.call)(cmd)
+    if rc != 0:
+        print("Could not change the scheduled task." if at else "There was no scheduled task to remove.")
+        return 1
+    if at:
+        print(f"Done: it runs every day at {at} (while you're logged in; a missed run catches up later).\n"
+              f"Run it right now with:  schtasks /Run /TN \"{TASK_NAME}\"")
+    else:
+        print("The daily task was removed.")
+    return 0
+
+
 def cmd_selfupdate(if_older_than_days: float = 0, runner=None) -> int:
     """pip-upgrade the YouTube libraries (YouTube changes often; new yt-dlp releases follow within days)."""
     import subprocess
     import time
+
+    from .paths import FROZEN, RELEASES_URL
+
+    if FROZEN:
+        from .ytdlp_common import ytdlp_age_days
+
+        age = ytdlp_age_days()
+        print(f"This is the one-file .exe - its yt-dlp is {age if age is not None else '?'} days old and can't be "
+              f"updated in place.\nIf YouTube stopped working, download the newest .exe from {RELEASES_URL}")
+        return 0
 
     stamp = PROJECT_DIR / ".last_update"
     try:
@@ -416,7 +504,7 @@ def _cmd_run(s: Settings, transcripts_only_list: str | None = None, should_stop=
 
         for v in videos:  # a saved list's transcript columns may be stale: the manifest is the record
             v.transcript_status = v.transcript_language = v.transcript_kind = v.transcript_file = ""
-            v.keyword_mentions = None
+            v.keyword_mentions, v.duplicate_of = None, ""
         apply_manifest(videos, s)
         stamp = dt.datetime.now().strftime("%Y-%m-%d_%H%M")
         if not videos:
@@ -464,6 +552,8 @@ def _cmd_run(s: Settings, transcripts_only_list: str | None = None, should_stop=
     log.info("Done: %s", summary or "nothing to do")
     if lib:
         log.info("Every video so far (all runs): %s", lib.resolve())
+    if (out / "trends.html").exists():
+        log.info("Keyword trends over time: %s", (out / "trends.html").resolve())
     log.info("Transcripts folder: %s", (out / "transcripts").resolve())
     if s.open_list_when_done and not transcripts_only_list:
         _open_file(html)
@@ -636,6 +726,8 @@ def main(argv: list[str] | None = None) -> int:
         return init_config(PROJECT_DIR)
     if args.command == "selfupdate":
         return cmd_selfupdate(args.if_older_than)
+    if args.command in ("schedule", "unschedule"):
+        return cmd_schedule(getattr(args, "at", "") if args.command == "schedule" else None)
 
     from .config import ConfigError
 

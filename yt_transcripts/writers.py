@@ -64,6 +64,7 @@ LIST_DESCRIPTION_CHARS = 500  # the transcript files keep the full description; 
 
 def _list_dict(v: Video) -> dict:
     d = v.to_dict()
+    d.pop("comments", None)  # in the transcript files; the list stays small
     if len(d.get("description") or "") > LIST_DESCRIPTION_CHARS:
         d["description"] = d["description"][:LIST_DESCRIPTION_CHARS]
     return d
@@ -91,7 +92,7 @@ def write_library(out_dir: Path, s) -> Path | None:
             except (TypeError, ValueError):
                 continue
             v.transcript_status = v.transcript_language = v.transcript_kind = v.transcript_file = ""
-            v.keyword_mentions, v.is_new = None, False  # the manifest is the record for transcripts
+            v.keyword_mentions, v.is_new, v.duplicate_of = None, False, ""  # the manifest is the record
             old = merged.get(v.video_id)
             if old is None:
                 merged[v.video_id] = v
@@ -326,6 +327,13 @@ def _header_lines(v: Video, t: Transcript) -> list[str]:
         lines.append(f"Tags: {', '.join(v.tags[:MAX_TAGS_SHOWN])}")
     if v.chapters:
         lines.append(f"Chapters: {len(v.chapters)}")
+    if t.removed:
+        from .sponsorblock import describe
+
+        lines.append(f"Skipped (SponsorBlock): {describe(t.removed)}")
+    if v.duplicate_of:
+        vid, _, title = v.duplicate_of.partition(" ")
+        lines.append(f"Repeats: {title or vid} (https://www.youtube.com/watch?v={vid})")
     return lines
 
 
@@ -387,6 +395,10 @@ def render_txt(v: Video, t: Transcript, timestamps: bool = False, paragraph_seco
             lines += [f"== {_one_line(text)} ({format_ts(start)}) ==", ""]
         else:
             lines += [f"[{format_ts(start)}] {text}" if timestamps else text, ""]
+    if v.comments:
+        lines += ["-" * 60, "", "Top comments:", ""]
+        for c in v.comments:
+            lines += [f"- {_one_line(c['author']) or 'someone'} ({c['likes']:,} likes): {' '.join(c['text'].split())}"]
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -440,6 +452,11 @@ def render_md(v: Video, t: Transcript, paragraph_seconds: int = 30, *, propertie
             lines += [f"{h}## {_one_line(text)} ([{format_ts(start)}]({link}))", ""]
         else:
             lines += [f"[{format_ts(start)}]({link}) {_md_text(text)}", ""]
+    if v.comments:
+        lines += [f"{h}# Top comments", ""]
+        for c in v.comments:
+            lines += [f"- **{_md_text(_one_line(c['author'])) or 'someone'}** ({c['likes']:,} likes): "
+                      f"{_md_text(' '.join(c['text'].split()))}"]
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -469,6 +486,7 @@ def render_json(v: Video, t: Transcript) -> str:
             "language_name": t.language_name,
             "kind": t.kind,
             "method": t.method,
+            "skipped": t.skipped,  # SponsorBlock segments (the text below is complete; other formats cut them)
             "text": t.text,
             "segments": [{"start": round(s.start, 3), "duration": round(s.duration, 3), "text": s.text}
                          for s in t.segments],

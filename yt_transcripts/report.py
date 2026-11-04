@@ -144,6 +144,11 @@ def render_html(videos: list[Video], base_dir: Path, title: str = "YouTube video
         link = _rel_link(v.transcript_file, base_dir)
         status = (f'<a class="pill {st_cls}" href="{link}">{st_text}</a>' if link and v.transcript_status == "ok"
                   else (f'<span class="pill {st_cls}">{e(st_text)}</span>' if st_text else ""))
+        if v.duplicate_of:
+            dvid, _, dtitle = v.duplicate_of.partition(" ")
+            status += (f' <a class="pill none" href="https://www.youtube.com/watch?v={e(dvid)}" target="_blank" '
+                       f'rel="noopener" title="Its text repeats: {e(dtitle or dvid)} - left out of the AI files">'
+                       'repeat</a>')
         preview = transcript_preview(v.transcript_file) if v.transcript_status == "ok" else ""
         preview_html = (f'<details class="pv"><summary>preview</summary><p>{e(preview)}</p></details>'
                         if preview else "")

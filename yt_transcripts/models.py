@@ -26,6 +26,8 @@ class Video:
     description: str = ""
     tags: list[str] = field(default_factory=list)
     chapters: list[dict] = field(default_factory=list)  # [{"start": seconds, "title": "..."}]
+    comments: list[dict] = field(default_factory=list)  # top comments [{"author", "text", "likes"}] (optional)
+    duplicate_of: str = ""  # "VIDEO_ID title" when this transcript repeats another one (clip / re-upload)
     is_new: bool = False  # not seen in any earlier search
     first_seen: str = ""  # when a search first found it
     # filled in by the transcript stage
@@ -79,6 +81,7 @@ class Video:
                 clean[bool_field] = v.strip().lower() in ("1", "true", "yes")
         clean["tags"] = clean_tags(clean.get("tags"))
         clean["chapters"] = clean_chapters(clean.get("chapters"))
+        clean["comments"] = clean_comments(clean.get("comments"))
         for k, v in list(clean.items()):
             if v is None and k not in ("views", "duration_seconds", "keyword_mentions"):
                 clean[k] = ""
@@ -106,6 +109,7 @@ class Video:
             self.description = other.description
         self.tags = self.tags or list(other.tags)
         self.chapters = self.chapters or list(other.chapters)
+        self.comments = self.comments or list(other.comments)
         self.is_short = self.is_short or other.is_short
 
 
@@ -120,6 +124,25 @@ def clean_tags(raw: Any) -> list[str]:
         t = str(t).strip() if t is not None else ""
         if t and t not in out:
             out.append(t)
+    return out
+
+
+def clean_comments(raw: Any) -> list[dict]:
+    """Comments as [{"author": str, "text": str, "likes": int}], ignoring anything malformed."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out = []
+    for c in raw:
+        if not isinstance(c, dict):
+            continue
+        text = str(c.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            likes = int(c.get("likes", c.get("like_count")) or 0)
+        except (TypeError, ValueError):
+            likes = 0
+        out.append({"author": str(c.get("author") or "").strip(), "text": text, "likes": likes})
     return out
 
 
@@ -161,6 +184,8 @@ class Transcript:
     kind: str = ""  # "manual" | "auto"
     method: str = ""  # which fetcher produced it
     segments: list[Segment] = field(default_factory=list)
+    skipped: list[dict] = field(default_factory=list)  # SponsorBlock segments known for this video
+    removed: list[dict] = field(default_factory=list)  # ...the ones actually cut from this copy's text
 
     @property
     def text(self) -> str:

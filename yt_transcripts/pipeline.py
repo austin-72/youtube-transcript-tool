@@ -247,6 +247,25 @@ def _absorb_info(v: Video, fetcher) -> None:
         from .search_ytdlp import apply_full_info
 
         apply_full_info(v, info)
+    comments = getattr(fetcher, "last_comments", None)
+    if comments:
+        v.comments = list(comments)
+
+
+def _with_extras(s: Settings):
+    """fetch_one plus the SponsorBlock lookup (in the worker, so downloads run on while it answers)."""
+    cats = list(s.sponsorblock or [])
+
+    def fetch(v: Video, fetchers: list, breaker=None):
+        t, status, msg, method = fetch_one(v, fetchers, breaker)
+        if t is not None and cats:
+            from . import sponsorblock
+
+            segs = sponsorblock.fetch_segments(v.video_id, cats, v.duration_seconds)
+            t.skipped = segs or []
+            t.sb_checked = segs is not None
+        return t, status, msg, method
+    return fetch
 
 
 def download_all(videos: list[Video], s: Settings, *, ydl_factory: Callable | None = None,
@@ -283,7 +302,7 @@ def download_all(videos: list[Video], s: Settings, *, ydl_factory: Callable | No
 
                 patch_relative_time_parsing()  # once, before threads exist
             run.fetch_total = len(jobs)
-            engine = Engine(jobs, s, pool, build_fetchers=build_fetchers, fetch_one=fetch_one,
+            engine = Engine(jobs, s, pool, build_fetchers=build_fetchers, fetch_one=_with_extras(s),
                             breaker=MethodBreaker(), looks_offline=_looks_offline, backoff=BACKOFF_SECONDS,
                             on_result=run.apply, ydl_factory=ydl_factory, sleep=sleep, should_stop=should_stop)
             reason = engine.run(n_workers, prefer_url=s.proxy if proxies else "")
@@ -295,11 +314,20 @@ def download_all(videos: list[Video], s: Settings, *, ydl_factory: Callable | No
     finally:
         run.manifest.save()
 
+    if run.dupes is not None:
+        run.dupes.save()
     if s.combine and run.done_now:
         done = [vt for _, vt in sorted(run.done_now, key=lambda x: x[0])]  # list order, not finishing order
+        repeats = [vt for vt in done if vt[0].duplicate_of]
+        if repeats and s.skip_duplicates:
+            done = [vt for vt in done if not vt[0].duplicate_of]
+            log.info("Left %d repeated transcript%s (clips / re-uploads) out of the combined file.",
+                     len(repeats), "" if len(repeats) == 1 else "s")
         paths = write_combined(done, root / "combined", run.stamp, s.paragraph_seconds,
-                               int(s.combine_max_words or 0))
-        if len(paths) == 1:
+                               int(s.combine_max_words or 0)) if done else []
+        if not paths:
+            pass
+        elif len(paths) == 1:
             log.info("Combined file (for reading or an AI): %s", paths[0].resolve())
         else:
             log.info("Combined files (for reading or an AI), %d in %s", len(paths), paths[0].parent.resolve())
@@ -346,12 +374,17 @@ def _plan(videos: list[Video], s: Settings, run: "_Run") -> list[tuple[int, Vide
     for i, v in enumerate(videos):
         rec = run.manifest.get(v.video_id)
         skip = should_skip(rec, s)
+        if skip and run.sb_refresh_due(v, rec):
+            saved = _transcript_from_saved_json(rec, run.root)
+            if saved is not None:
+                run.rebuild(v, rec, saved, refresh_sb=True)
+                continue
         if skip:
             run.skip(v, rec, skip)
             continue
         saved = _transcript_from_saved_json(rec, run.root)
         if saved is not None:  # finished before, only a format/text setting changed: no YouTube request
-            run.rebuild(v, rec, saved)
+            run.rebuild(v, rec, saved, refresh_sb=bool(rec) and run.sb_refresh_due(v, rec))
             continue
         todo.append((i, v))
     if s.max_transcripts_per_run and len(todo) > s.max_transcripts_per_run:
@@ -378,6 +411,60 @@ class _Run:
         self.fetched = 0
         self.started = time.monotonic()
         self.offline_in_a_row = 0
+        self.dupes = None
+        if s.skip_duplicates:
+            from .dupes import DuplicateIndex
+
+            self.dupes = DuplicateIndex(root)  # loads its file only when the first video needs checking
+        self.sb_refreshed = 0
+        self.raw_by_id: dict[str, Transcript] = {}
+        self.base_by_id: dict[str, tuple[Path, str]] = {}
+
+    def _saved_text(self, vid: str) -> str:
+        """Another video's transcript text, from its saved .json (for the duplicate check)."""
+        rec = self.manifest.get(vid)
+        js = rec.get("files", {}).get("json") if rec else None
+        if not js:
+            return ""
+        try:
+            data = json.loads(_resolve(js, self.root).read_text(encoding="utf-8"))
+            return " ".join(str(x.get("text", "")) for x in data["transcript"]["segments"])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return ""
+
+    def _check_repeat(self, v: Video, raw) -> tuple[list[str], list[str]]:
+        """Sets v.duplicate_of if this text repeats an earlier video. Returns (log notes, earlier videos of
+        this run whose text is inside this one)."""
+        if self.dupes is None or "json" not in (self.s.formats or []):
+            return [], []  # the exact check reads the saved .json files
+
+        def names_me(other: str) -> bool:  # never let two videos point at each other
+            return str(self.manifest.get(other).get("duplicate_of", "")).split(" ")[0] == v.video_id
+        repeats, contained = self.dupes.check_and_add(v.video_id, v.title, raw.text, self._saved_text,
+                                                      skip=names_me)
+        notes = []
+        if repeats:
+            v.duplicate_of = f"{repeats[0]} {repeats[1]}".strip()
+            notes.append(f"    (its text repeats \"{_short(repeats[1] or repeats[0])}\" - left out of the combined file)")
+        return notes, contained
+
+    def _mark_contained(self, v: Video, contained: list[str]) -> None:
+        """Earlier videos of this run (clips) whose text turned out to be inside this one: mark them and
+        rewrite their files, so their headers say so too."""
+        this_run = {vt[0].video_id: vt for _, vt in self.done_now}
+        for other in contained:
+            pair = this_run.get(other)
+            if pair is None or pair[0].duplicate_of or other == v.video_id:
+                continue
+            ov, ot = pair
+            ov.duplicate_of = f"{v.video_id} {v.title}".strip()
+            self.manifest.update(other, duplicate_of=ov.duplicate_of)
+            where = self.base_by_id.get(other)
+            if where is not None:
+                s = self.s
+                write_transcript(ov, ot, where[0], s.formats, s.txt_timestamps, s.paragraph_seconds, base=where[1],
+                                 raw=self.raw_by_id.get(other))
+            log.info("    (\"%s\" is part of this one - left out of the combined file)", _short(ov.title))
 
     def _tick(self) -> int:
         self.progress += 1
@@ -392,13 +479,49 @@ class _Run:
         v.transcript_language = rec.get("language", "")
         v.transcript_kind = rec.get("kind", "")
         v.keyword_mentions = rec.get("mentions")
+        v.duplicate_of = v.duplicate_of or rec.get("duplicate_of", "")
         first = rec.get("files", {}).get(s.formats[0], "") if s.formats else ""
         v.transcript_file = str(_resolve(first, root)) if first else ""
         log.info("[%d/%d] skip  %s  (%s)", self._tick(), self.total, _short(v.title or v.video_id), why)
 
-    def rebuild(self, v: Video, rec: dict, saved) -> None:
+    SB_REFRESH_MAX = 150  # SponsorBlock re-checks per run (one small request each, own connection)
+
+    def sb_refresh_due(self, v: Video, rec: dict) -> bool:
+        """Ask SponsorBlock again for a finished video? When categories were added since it was asked, or
+        when a new upload had no segments yet (people submit them over the first days)."""
+        s = self.s
+        sb = rec.get("sb") if rec.get("status") == tr.OK else None
+        if not s.sponsorblock or not isinstance(sb, dict) or self.sb_refreshed >= self.SB_REFRESH_MAX:
+            return False  # transcripts from before SponsorBlock support are left as they are
+        if set(s.sponsorblock) - set(sb.get("asked") or []):
+            return True
+        if sb.get("found") or int(sb.get("tries", 1)) >= 3:
+            return False
+        checked = parse_retry_time(sb.get("checked", "")) if sb.get("checked") else None
+        now = dt.datetime.now(dt.timezone.utc)
+        young = _is_fresh(rec.get("published") or v.published, now)
+        return young and (checked is None or (now - checked).total_seconds() > 12 * 3600)
+
+    def _sb_record(self, vid: str, cats: list[str], ok: bool, found: int, rec: dict) -> None:
+        old = rec.get("sb") if isinstance(rec.get("sb"), dict) else {}
+        self.manifest.update(vid, sb={"asked": sorted(cats),
+                                      "checked": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+                                      if ok else "", "found": found, "tries": int(old.get("tries", 0)) + 1})
+
+    def rebuild(self, v: Video, rec: dict, saved, refresh_sb: bool = False) -> None:
         s, root = self.s, self.root
         t, saved_video, folder = saved
+        sb_changed = False
+        if refresh_sb:
+            from . import sponsorblock
+
+            self.sb_refreshed += 1
+            segs = sponsorblock.fetch_segments(v.video_id, list(s.sponsorblock), v.duration_seconds
+                                               or saved_video.get("duration_seconds"))
+            if segs is not None:
+                sb_changed = segs != t.skipped
+                t.skipped = segs
+            self._sb_record(v.video_id, list(s.sponsorblock), segs is not None, len(segs or []), rec)
         try:
             sv = Video.from_dict({**saved_video, "video_id": v.video_id})  # coerces hand-edited values
         except (TypeError, ValueError):
@@ -407,9 +530,13 @@ class _Run:
             # bare links have no title/date: take them from the save
             if hasattr(v, name) and not getattr(v, name) and getattr(sv, name):
                 setattr(v, name, getattr(sv, name))
+        if sv is not None and len(sv.description) > len(v.description):  # the full text, not a search snippet
+            v.description = sv.description
+        v.duplicate_of = v.duplicate_of or rec.get("duplicate_of", "")
         have = {k: _resolve(f, root) for k, f in rec.get("files", {}).items()}
         restyle = _render_changed(rec, s)  # e.g. "timestamps in .txt" was switched on
-        todo = [f for f in s.formats if f not in have or not have[f].exists() or (restyle and f != "json")]
+        todo = [f for f in s.formats if f not in have or not have[f].exists() or (restyle and f != "json")
+                or sb_changed]
         raw = t
         t = _clean_text(t, s)
         base = Path(rec["files"]["json"]).stem  # same name and folder as the files already there
@@ -448,6 +575,8 @@ class _Run:
             v.transcript_language, v.transcript_kind = t.language, t.kind
             # "mentions" = how often the transcript says the search words; a channel name isn't one
             v.keyword_mentions = None if v.source in ("channel", "playlist") else count_mentions(t.text, v.keyword)
+            v.duplicate_of = ""  # a fresh download is judged anew
+            notes, contained = self._check_repeat(v, raw)  # before writing, so the files carry "Repeats:"
             folder = transcript_folder(self.tdir, v, s.organize_by)
             files = write_transcript(v, t, folder, s.formats, s.txt_timestamps, s.paragraph_seconds,
                                      template=s.file_name, raw=raw)
@@ -455,11 +584,22 @@ class _Run:
             self.manifest.update(v.video_id, status=tr.OK, method=method, language=t.language, kind=t.kind,
                                  files={k: _relative(p, root) for k, p in files.items()}, error="",
                                  attempts=attempts, mentions=v.keyword_mentions, next_retry="",
-                                 title=v.title, run=self.stamp, render=render_signature(s))
+                                 title=v.title, run=self.stamp, render=render_signature(s),
+                                 duplicate_of=v.duplicate_of)
+            if s.sponsorblock and hasattr(raw, "sb_checked"):
+                self._sb_record(v.video_id, list(s.sponsorblock), raw.sb_checked, len(raw.skipped), rec)
+            if files:
+                some = next(iter(files.values()))
+                self.base_by_id[v.video_id] = (some.parent, some.stem)
+            self.raw_by_id[v.video_id] = raw
             self.done_now.append((r.job.index, (v, t)))
             self.stats["ok"] += 1
-            log.info("[%d/%d] OK    %s  (%s, %s, %d words)%s", self._tick(), self.total, _short(v.title),
-                     t.language, t.kind, len(t.text.split()), via)
+            extra = f", {len(t.removed)} sponsor/promo part{'s' if len(t.removed) != 1 else ''} cut" if t.removed else ""
+            log.info("[%d/%d] OK    %s  (%s, %s, %d words%s)%s", self._tick(), self.total, _short(v.title),
+                     t.language, t.kind, len(t.text.split()), extra, via)
+            for note in notes:
+                log.info(note)
+            self._mark_contained(v, contained)
         else:
             po_hits = rec.get("po_token_hits", 0) + 1 if status == tr.PO_TOKEN else 0
             self.manifest.update(v.video_id, status=status, method=method, error=msg, attempts=attempts,
@@ -527,12 +667,19 @@ class _Run:
 def _clean_text(t, s: Settings):
     """A cleaned copy for the readable formats; the .json keeps the original text, so switching the
     cleaning off later rebuilds the files with nothing lost."""
-    if not (s.strip_sound_tags or s.remove_filler_words):
+    cats = set(s.sponsorblock or [])
+    cut = [x for x in (t.skipped or []) if x.get("category") in cats]
+    if not (s.strip_sound_tags or s.remove_filler_words or cut):
         return t
     import copy
 
     t = copy.copy(t)
     t.segments = list(t.segments)
+    if cut:
+        from . import sponsorblock
+
+        sponsorblock.cut(t, cut)
+        t.removed = cut
     if s.strip_sound_tags:
         tr.strip_sound_tags(t)
     if s.remove_filler_words:
@@ -543,7 +690,12 @@ def _clean_text(t, s: Settings):
 def render_signature(s: Settings) -> str:
     """The settings that shape the text of transcript files (not which video/track was fetched)."""
     sig = f"ts={int(bool(s.txt_timestamps))};sound={int(bool(s.strip_sound_tags))};para={s.paragraph_seconds}"
-    return sig + (";filler=1" if s.remove_filler_words else "")
+    sig += ";filler=1" if s.remove_filler_words else ""
+    from .config import Settings as _S
+
+    if sorted(s.sponsorblock or []) != sorted(_S().sponsorblock):  # the default adds nothing: no mass rebuild
+        sig += ";sb=" + ",".join(sorted(s.sponsorblock or []))
+    return sig
 
 
 def _render_changed(rec: dict, s: Settings) -> bool:
@@ -566,6 +718,7 @@ def apply_manifest(videos: list[Video], s: Settings) -> None:
         v.transcript_language = rec.get("language", "")
         v.transcript_kind = rec.get("kind", "")
         v.keyword_mentions = rec.get("mentions")
+        v.duplicate_of = v.duplicate_of or rec.get("duplicate_of", "")
         for fmt in (s.formats or []) + list(rec.get("files", {})):
             f = rec.get("files", {}).get(fmt)
             if f and _resolve(f, root).exists():
@@ -599,10 +752,11 @@ def _transcript_from_saved_json(rec: dict, root: Path) -> tuple[Transcript, dict
         return None
     if not segs:
         return None
+    skipped = [x for x in data.get("skipped") or [] if isinstance(x, dict) and {"start", "end", "category"} <= set(x)]
     t = Transcript(video_id=vid, language=data.get("language", ""), language_name=data.get("language_name", ""),
-                   kind=data.get("kind", ""), method=data.get("method", ""), segments=segs)
+                   kind=data.get("kind", ""), method=data.get("method", ""), segments=segs, skipped=skipped)
     keep = ("title", "channel", "channel_id", "channel_handle", "published", "published_exact", "views",
-            "duration_seconds", "keyword")
+            "duration_seconds", "keyword", "description", "tags", "chapters", "comments")
     return t, {k: video.get(k) for k in keep if k in video}, p.parent
 
 

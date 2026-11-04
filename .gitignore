@@ -13,6 +13,10 @@ output/
 tools/
 *.log
 
+# Build output of build_exe.bat
+build/
+dist/
+
 # Caches
 __pycache__/
 *.pyc

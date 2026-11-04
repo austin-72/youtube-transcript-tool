@@ -273,6 +273,7 @@ class YtDlpFetcher:
         self._ydl = None  # the instance used by the current attempt
         self.profile = "full"
         self.last_info: dict | None = None
+        self.last_comments: list[dict] = []
 
     def _get_ydl(self, profile: str = "full"):
         if profile not in self._ydls:
@@ -287,8 +288,9 @@ class YtDlpFetcher:
                 self._loggers[profile] = YdlLogger()
                 # The subtitle flags only make yt-dlp *report* captions it had to drop
                 # (e.g. for a missing PO token); nothing is downloaded with download=False.
+                extra = {"getcomments": True} if int(getattr(self.settings, "top_comments", 0) or 0) > 0 else {}
                 self._ydls[profile] = make_ydl(self.settings, logger=self._loggers[profile], profile=profile,
-                                               writesubtitles=True, writeautomaticsub=True)
+                                               writesubtitles=True, writeautomaticsub=True, **extra)
         self._logger = self._loggers.get(profile)
         self._ydl = self._ydls[profile]
         return self._ydl
@@ -336,6 +338,7 @@ class YtDlpFetcher:
         ydl = self._get_ydl(profile)
         self.profile = profile
         self.last_info = None
+        self.last_comments = []
         if self._logger:
             self._logger.warnings.clear()
         try:
@@ -413,6 +416,7 @@ class YtDlpFetcher:
             segments = self._download_track(ydl, chosen.handle, order)
         if not segments:
             raise FetchError(PO_TOKEN, "caption track downloaded but was empty (YouTube may require a PO token)")
+        self.last_comments = self._top_comments(info)
         return Transcript(
             video_id=video.video_id,
             language=chosen.lang,
@@ -421,6 +425,28 @@ class YtDlpFetcher:
             method=self.name,
             segments=segments,
         )
+
+    def _top_comments(self, info) -> list[dict]:
+        """The most-liked comments (only when top_comments is set): yt-dlp fetches them lazily, so the
+        extra requests happen only here, after the transcript is safely in hand."""
+        n = int(getattr(self.settings, "top_comments", 0) or 0)
+        post = info.get("__post_extractor") if isinstance(info, dict) else None
+        if n <= 0 or not callable(post):
+            return []
+        try:
+            got = post() or {}
+        except Exception as e:  # noqa: BLE001 - comments are a bonus; never lose the transcript over them
+            log.debug("    comments not available: %s", _first_line(e))
+            return []
+        out = []
+        for c in (got.get("comments") or [])[: n * 2]:
+            if not isinstance(c, dict) or c.get("parent", "root") != "root":
+                continue
+            out.append({"author": str(c.get("author") or ""), "text": str(c.get("text") or "").strip(),
+                        "likes": int(c.get("like_count") or 0)})
+        out = [c for c in out if c["text"]]
+        out.sort(key=lambda c: -c["likes"])
+        return out[:n]
 
     def _untranslated_fallback(self, tracks: list[Track]) -> Track | None:
         import copy

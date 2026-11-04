@@ -74,6 +74,12 @@ prefer_manual = true        # creator-uploaded captions before auto-generated on
 formats = ["txt", "json"]   # any of: "txt", "md", "srt", "vtt", "json"
 txt_timestamps = false      # add [mm:ss] at the start of each paragraph in .txt files
 strip_sound_tags = false    # remove [Music], [Applause], (laughs) and similar from the text
+# Cut sponsor reads, self-promotion and "like and subscribe" from the text (SponsorBlock database;
+# one tiny lookup per video over your own connection, never through proxies). [] turns it off.
+# Also possible: "intro", "outro", "preview", "filler", "music_offtopic", "hook".
+sponsorblock = ["sponsor", "selfpromo", "interaction"]
+top_comments = 0            # also save the N most-liked comments per video (0 = off; ~2 extra requests each)
+skip_duplicates = true      # leave clips / re-uploads that repeat another video's text out of the AI files
 remove_filler_words = false # remove "um", "uh", "erm", "hmm"
 min_transcript_words = 0    # don't keep transcripts shorter than this (music videos, intros); 0 = keep all
 paragraph_seconds = 30      # group text into paragraphs of roughly this many seconds

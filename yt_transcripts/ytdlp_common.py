@@ -11,7 +11,7 @@ from typing import Any
 from .config import Settings
 
 log = logging.getLogger("yt_transcripts")
-PROJECT_DIR = Path(__file__).resolve().parent.parent
+from .paths import APP_DIR as PROJECT_DIR  # noqa: E402
 
 
 class YdlLogger:
@@ -124,6 +124,11 @@ def base_options(settings: Settings, *, logger: YdlLogger | None = None, profile
     if settings.proxy:
         opts["proxy"] = settings.proxy
     opts["extractor_args"]["youtube"].update(SAVER_ARGS.get(profile, {}))
+    n = int(getattr(settings, "top_comments", 0) or 0)
+    if n > 0:
+        # top-sorted, no replies: usually one or two extra requests per video
+        opts["extractor_args"]["youtube"].update({"comment_sort": ["top"],
+                                                  "max_comments": [str(n), str(n), "0", "0", "1"]})
     for spec in settings.ytdlp_extractor_args or []:  # user-supplied fixes override our defaults
         try:
             key, args = parse_extractor_args(str(spec))
