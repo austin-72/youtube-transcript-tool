@@ -115,14 +115,30 @@ ROTATING_HOSTS = ("p.webshare.io", "gate.smartproxy.com", "gate.decodo.com", "pr
                   "brd.superproxy.io", "geo.iproyal.com", "rotating.proxyempire.io", "proxy.packetstream.io")
 
 
+# The rotating port of gateways that also offer sticky sessions on other ports (Decodo/Smartproxy: 7000;
+# 10001+ keep one IP for a while)
+ROTATING_PORT = {"gate.smartproxy.com": 7000, "gate.decodo.com": 7000}
+# user-name parts that ask the gateway for a sticky session (the same IP for some minutes)
+_STICKY_USER = ("session-", "sessid-", "_session-", "-sessionduration", "sesstime-")
+
+
 def looks_rotating(url: str) -> bool:
+    """A new IP for every connection? (Sticky sessions keep one IP for minutes: a reconnect won't help.)"""
     from urllib.parse import unquote
 
     try:
         u = urlsplit(url)
+        port = u.port
     except ValueError:
         return False
-    return "-rotate" in unquote(u.username or "").lower() or (u.hostname or "").lower() in ROTATING_HOSTS
+    user = unquote(u.username or "").lower()
+    host = (u.hostname or "").lower()
+    if "-rotate" in user:
+        return True
+    if host not in ROTATING_HOSTS or any(m in user for m in _STICKY_USER):
+        return False
+    want = ROTATING_PORT.get(host)
+    return want is None or port in (None, want)
 
 
 BENCH_BLOCKED_SECONDS = 600  # a blocked proxy rests 10 min (doubling, max 1 h) while others work
@@ -139,6 +155,8 @@ class Slot:
         self.url = url
         self.rotating = rotating
         self.capacity = max(1, capacity)
+        self.order = 0  # position in the list (set by the pool)
+        self.last_used = 0.0  # when a worker last took it: big lists are used round-robin
         self.leases = 0
         self.benched_until = 0.0
         self.blocks = 0
@@ -170,9 +188,12 @@ class ProxyPool:
             self.slots = [Slot(u, is_rot(u), per_proxy) for u in urls]
         else:
             self.slots = [Slot("", False, direct_capacity)]
+        for i, sl in enumerate(self.slots):
+            sl.order = i
         self.round = 0
         self.backing_off = False
         self.stopped = ""  # "blocked" / "dead" once the pool gives up
+        self.per_hour = 0  # videos per hour per IP (set by the engine): slots that used it up come last
 
     # -- leasing ---------------------------------------------------------------------------------------
     def _free(self, now: float) -> list[Slot]:
@@ -183,10 +204,28 @@ class ProxyPool:
             free = self._free(self.clock())
             if not free or self.stopped:
                 return None
-            pick = prefer if prefer in free else min(free, key=lambda s: (s.leases, s.blocks + s.dead,
-                                                                         self.slots.index(s)))
+            # the least troubled, then the one rested longest: a long list is worked through round-robin,
+            # so each IP is used for only a few videos
+            now = self.clock()
+            pick = prefer if prefer in free else min(free, key=lambda s: (s.leases, self._hour_full(s, now),
+                                                                         s.blocks + s.dead, s.last_used, s.order))
             pick.leases += 1
+            pick.last_used = self.clock()
             return pick
+
+    def _hour_full(self, s: Slot, now: float) -> bool:
+        """Has this (non-rotating) proxy done its videos_per_hour_per_ip already?"""
+        if self.per_hour <= 0 or s.rotating:
+            return False
+        while s.starts and now - s.starts[0] >= 3600:
+            s.starts.popleft()
+        return len(s.starts) >= self.per_hour
+
+    def has_free(self, besides: Slot | None = None) -> bool:
+        """Is another slot ready right now (not leased to capacity, not resting, hour not used up)?"""
+        with self.cond:
+            now = self.clock()
+            return any(s is not besides and not self._hour_full(s, now) for s in self._free(now))
 
     def release(self, slot: Slot) -> None:
         with self.cond:

@@ -17,3 +17,13 @@ def _no_sponsorblock_network(monkeypatch):
     real = sponsorblock.fetch_segments
     monkeypatch.setattr(sponsorblock, "fetch_segments",
                         lambda vid, cats, duration=None, *, get=None: real(vid, cats, duration, get=get) if get else [])
+
+
+@pytest.fixture(autouse=True)
+def _no_feed_network(monkeypatch):
+    """Tests never download channel feeds; the ones about them pass their own `get`."""
+    from yt_transcripts import feeds
+
+    real = feeds.FeedDates._download
+    monkeypatch.setattr(feeds.FeedDates, "_download",
+                        lambda self, cid: real(self, cid) if self._get is not None else {})

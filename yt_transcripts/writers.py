@@ -46,12 +46,13 @@ def mark_new(videos: list[Video], out_dir: Path) -> int:
 
 # ---- video list ------------------------------------------------------------------
 def write_video_list(videos: list[Video], out_dir: Path, stem: str = "video_list",
-                     summary: str = "") -> dict[str, Path]:
+                     summary: str = "", *, description: bool = True, chapters: bool = True) -> dict[str, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / f"{stem}.csv"
     json_path = out_dir / f"{stem}.json"
     csv_path = _write_list_file(csv_path, _csv_text(videos), encoding="utf-8-sig")  # BOM so Excel shows unicode
-    json_path = _write_list_file(json_path, json.dumps([_list_dict(v) for v in videos], indent=2,
+    trimmed = [trim(v, description, chapters) for v in videos]
+    json_path = _write_list_file(json_path, json.dumps([_list_dict(v) for v in trimmed], indent=2,
                                                        ensure_ascii=False))
     from .report import render_html
 
@@ -60,6 +61,20 @@ def write_video_list(videos: list[Video], out_dir: Path, stem: str = "video_list
 
 
 LIST_DESCRIPTION_CHARS = 500  # the transcript files keep the full description; the list only a snippet
+
+
+def trim(v: Video, description: bool = True, chapters: bool = True) -> Video:
+    """The video as it is saved: without its description and/or chapters when those are switched off."""
+    if (description or not v.description) and (chapters or not v.chapters):
+        return v
+    import copy
+
+    out = copy.copy(v)
+    if not description:
+        out.description = ""
+    if not chapters:
+        out.chapters = []
+    return out
 
 
 def _list_dict(v: Video) -> dict:
@@ -263,8 +278,10 @@ def transcript_folder(root: Path, v: Video, organize_by: str) -> Path:
 
 def write_transcript(v: Video, t: Transcript, folder: Path, formats: list[str],
                      timestamps: bool = False, paragraph_seconds: int = 30, base: str = "",
-                     template: str = DEFAULT_NAME, raw: Transcript | None = None) -> dict[str, Path]:
+                     template: str = DEFAULT_NAME, raw: Transcript | None = None, *,
+                     description: bool = True, chapters: bool = True) -> dict[str, Path]:
     """Write the formats; `raw` (the uncleaned transcript) goes into the .json if given."""
+    v = trim(v, description, chapters)
     folder.mkdir(parents=True, exist_ok=True)
     longest_ext = max((len(f) for f in formats), default=4) + 1
     budget = MAX_PATH - len(str(folder.resolve())) - 1 - longest_ext - 4  # 4 = ".tmp"
@@ -278,7 +295,7 @@ def write_transcript(v: Video, t: Transcript, folder: Path, formats: list[str],
         if fmt == "txt":
             content = render_txt(v, t, timestamps, paragraph_seconds)
         elif fmt == "md":
-            content = render_md(v, t, paragraph_seconds)
+            content = render_md(v, t, paragraph_seconds, timestamps=timestamps)
         elif fmt == "srt":
             content = render_srt(t)
         elif fmt == "vtt":
@@ -392,7 +409,7 @@ def render_txt(v: Video, t: Transcript, timestamps: bool = False, paragraph_seco
     paras = paragraphs(t, paragraph_seconds, _chapter_starts(v))
     for kind, start, text in _with_chapters(v, paras):
         if kind == "chapter":
-            lines += [f"== {_one_line(text)} ({format_ts(start)}) ==", ""]
+            lines += [f"== {_one_line(text)} ({format_ts(start)}) ==" if timestamps else f"== {_one_line(text)} ==", ""]
         else:
             lines += [f"[{format_ts(start)}] {text}" if timestamps else text, ""]
     if v.comments:
@@ -436,7 +453,7 @@ def _md_text(text: str) -> str:
 
 
 def render_md(v: Video, t: Transcript, paragraph_seconds: int = 30, *, properties: bool = True,
-              description: bool = True, level: int = 1) -> str:
+              description: bool = True, level: int = 1, timestamps: bool = True) -> str:
     h = "#" * level
     lines = [front_matter(v, t)] if properties else []
     lines += [f"{h} {_one_line(v.title) or v.video_id}", ""]
@@ -449,9 +466,9 @@ def render_md(v: Video, t: Transcript, paragraph_seconds: int = 30, *, propertie
     for kind, start, text in _with_chapters(v, paras):
         link = f"https://www.youtube.com/watch?v={v.video_id}&t={int(start)}s"
         if kind == "chapter":
-            lines += [f"{h}## {_one_line(text)} ([{format_ts(start)}]({link}))", ""]
+            lines += [f"{h}## {_one_line(text)}" + (f" ([{format_ts(start)}]({link}))" if timestamps else ""), ""]
         else:
-            lines += [f"[{format_ts(start)}]({link}) {_md_text(text)}", ""]
+            lines += [(f"[{format_ts(start)}]({link}) " if timestamps else "") + _md_text(text), ""]
     if v.comments:
         lines += [f"{h}# Top comments", ""]
         for c in v.comments:
@@ -499,7 +516,8 @@ def _combined_key(v: Video) -> str:
 
 
 def write_combined(entries: list[tuple[Video, Transcript]], folder: Path, stamp: str,
-                   paragraph_seconds: int = 30, max_words: int = 0) -> list[Path]:
+                   paragraph_seconds: int = 30, max_words: int = 0, *, timestamps: bool = True,
+                   chapters: bool = True) -> list[Path]:
     """AI-ready files: one Markdown file per keyword per run, split into parts of at most `max_words`
     words (0 = no limit) so each part fits an AI chat or NotebookLM source. A video is never split."""
     groups: dict[str, list[tuple[Video, Transcript]]] = {}
@@ -508,7 +526,8 @@ def write_combined(entries: list[tuple[Video, Transcript]], folder: Path, stamp:
     written: list[Path] = []
     used: set[str] = set()  # names taken in this run - case-insensitive, like Windows
     for key, items in groups.items():
-        blocks = [(v, render_md(v, t, paragraph_seconds, properties=False, description=False, level=2))
+        blocks = [(v, render_md(trim(v, True, chapters), t, paragraph_seconds, properties=False, description=False,
+                                level=2, timestamps=timestamps))
                   for v, t in items]
         parts: list[list[tuple[Video, str]]] = [[]]
         words = 0

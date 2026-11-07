@@ -253,11 +253,20 @@ def _absorb_info(v: Video, fetcher) -> None:
 
 
 def _with_extras(s: Settings):
-    """fetch_one plus the SponsorBlock lookup (in the worker, so downloads run on while it answers)."""
+    """fetch_one plus the SponsorBlock lookup and the exact date from the channel feed (in the worker,
+    so downloads run on while they answer)."""
+    from .feeds import FeedDates
+
     cats = list(s.sponsorblock or [])
+    feeds = FeedDates(s) if s.feed_dates else None
 
     def fetch(v: Video, fetchers: list, breaker=None):
         t, status, msg, method = fetch_one(v, fetchers, breaker)
+        if t is not None and feeds is not None and not v.published_exact:
+            # the data saver skipped the watch page (where the exact date is): ask the channel's feed
+            hit = feeds.lookup(v.video_id, v.channel_id)
+            if hit:
+                v.published, v.published_exact = hit[0], True
         if t is not None and cats:
             from . import sponsorblock
 
@@ -293,9 +302,15 @@ def download_all(videos: list[Video], s: Settings, *, ydl_factory: Callable | No
 
             if netmeter.active() is not None:
                 netmeter.active().downloads_starting()
-            if proxies and s.data_saver in ("auto", "on", "max") and "ytdlp" in s.transcript_methods:
-                log.info("Data saver %s: fewer and smaller downloads per video through the proxies "
-                         "(data_saver = \"off\" turns it off).", "max" if s.data_saver == "max" else "on")
+            if proxies and "ytdlp" in s.transcript_methods:
+                import copy as _copy
+
+                ps = _copy.copy(s)
+                ps.proxy = ps.proxy or proxies[0]  # the workers' settings carry their proxy
+                profile = tr.saver_profile(ps)
+                if profile != "full":
+                    log.info("Data saver %s: %s per video through the proxies (data_saver = \"off\" turns it off).",
+                             profile, "two small requests" if profile == "max" else "fewer and smaller downloads")
             _announce(s, pool, n_workers, mask)
             if n_workers > 1:
                 from .ytdlp_common import patch_relative_time_parsing
@@ -324,7 +339,8 @@ def download_all(videos: list[Video], s: Settings, *, ydl_factory: Callable | No
             log.info("Left %d repeated transcript%s (clips / re-uploads) out of the combined file.",
                      len(repeats), "" if len(repeats) == 1 else "s")
         paths = write_combined(done, root / "combined", run.stamp, s.paragraph_seconds,
-                               int(s.combine_max_words or 0)) if done else []
+                               int(s.combine_max_words or 0), timestamps=s.timestamps,
+                               chapters=s.chapters) if done else []
         if not paths:
             pass
         elif len(paths) == 1:
@@ -360,6 +376,12 @@ def _announce(s: Settings, pool, n_workers: int, mask) -> None:
             kind += f" ({len(rotating)} rotating)"
         log.info("Using %s%s.", kind, f" with {n_workers} parallel downloads" if n_workers > 1 else
                  f": {mask(proxies[0])}" if len(proxies) == 1 else ", switching when YouTube blocks one")
+        from .workers import switch_after
+
+        n = switch_after(s, pool)
+        if n:
+            log.info("Taking turns through the list: %d videos per proxy, then the one that has rested longest "
+                     "(proxy_switch_after).", n)
     elif n_workers > 1:
         log.warning("Running %d downloads at once WITHOUT proxies - they all share your IP, so YouTube's "
                     "hourly limit is reached sooner. Proxies are the safe way to go faster.", n_workers)
@@ -462,8 +484,8 @@ class _Run:
             where = self.base_by_id.get(other)
             if where is not None:
                 s = self.s
-                write_transcript(ov, ot, where[0], s.formats, s.txt_timestamps, s.paragraph_seconds, base=where[1],
-                                 raw=self.raw_by_id.get(other))
+                write_transcript(ov, ot, where[0], s.formats, s.timestamps, s.paragraph_seconds, base=where[1],
+                                 raw=self.raw_by_id.get(other), **_keep(s))
             log.info("    (\"%s\" is part of this one - left out of the combined file)", _short(ov.title))
 
     def _tick(self) -> int:
@@ -535,12 +557,12 @@ class _Run:
         v.duplicate_of = v.duplicate_of or rec.get("duplicate_of", "")
         have = {k: _resolve(f, root) for k, f in rec.get("files", {}).items()}
         restyle = _render_changed(rec, s)  # e.g. "timestamps in .txt" was switched on
-        todo = [f for f in s.formats if f not in have or not have[f].exists() or (restyle and f != "json")
-                or sb_changed]
+        todo = [f for f in s.formats if f not in have or not have[f].exists() or restyle or sb_changed]
         raw = t
         t = _clean_text(t, s)
         base = Path(rec["files"]["json"]).stem  # same name and folder as the files already there
-        files = write_transcript(v, t, folder, todo, s.txt_timestamps, s.paragraph_seconds, base=base, raw=raw)
+        files = write_transcript(v, t, folder, todo, s.timestamps, s.paragraph_seconds, base=base, raw=raw,
+                                 **_keep(s))
         all_files = {**{k: f for k, f in have.items() if f.exists()}, **files}
         v.transcript_status, v.transcript_language, v.transcript_kind = tr.OK, t.language, t.kind
         v.keyword_mentions = rec.get("mentions")
@@ -578,8 +600,8 @@ class _Run:
             v.duplicate_of = ""  # a fresh download is judged anew
             notes, contained = self._check_repeat(v, raw)  # before writing, so the files carry "Repeats:"
             folder = transcript_folder(self.tdir, v, s.organize_by)
-            files = write_transcript(v, t, folder, s.formats, s.txt_timestamps, s.paragraph_seconds,
-                                     template=s.file_name, raw=raw)
+            files = write_transcript(v, t, folder, s.formats, s.timestamps, s.paragraph_seconds,
+                                     template=s.file_name, raw=raw, **_keep(s))
             v.transcript_file = str(files.get(s.formats[0], "")) if s.formats else ""
             self.manifest.update(v.video_id, status=tr.OK, method=method, language=t.language, kind=t.kind,
                                  files={k: _relative(p, root) for k, p in files.items()}, error="",
@@ -687,9 +709,15 @@ def _clean_text(t, s: Settings):
     return t
 
 
+def _keep(s: Settings) -> dict:
+    """What goes into the saved files besides the transcript (description, chapters)."""
+    return {"description": bool(s.include_description), "chapters": bool(s.chapters)}
+
+
 def render_signature(s: Settings) -> str:
     """The settings that shape the text of transcript files (not which video/track was fetched)."""
-    sig = f"ts={int(bool(s.txt_timestamps))};sound={int(bool(s.strip_sound_tags))};para={s.paragraph_seconds}"
+    sig = f"ts={int(bool(s.timestamps))};sound={int(bool(s.strip_sound_tags))};para={s.paragraph_seconds}"
+    sig += f";desc={int(bool(s.include_description))};ch={int(bool(s.chapters))}"
     sig += ";filler=1" if s.remove_filler_words else ""
     from .config import Settings as _S
 

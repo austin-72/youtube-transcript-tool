@@ -152,3 +152,15 @@ def test_schedule_command_for_exe_and_scripts(tmp_path):
     assert "Unregister-ScheduledTask" in cli.schedule_command(None, True, tmp_path, exe)[-1]
     calls = []
     assert cli.cmd_schedule("08:00", runner=lambda c: calls.append(c) or 0) == 0 and calls
+
+
+def test_description_and_chapter_flags_reach_the_settings(tmp_path):
+    from yt_transcripts import cli
+
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("", encoding="utf-8")
+    s = cli.settings_from_args(cli.build_parser().parse_args(["run", "-c", str(cfg), "--description", "--chapters",
+                                                              "--timestamps"]))
+    assert (s.include_description, s.chapters, s.timestamps) == (True, True, True)
+    s = cli.settings_from_args(cli.build_parser().parse_args(["run", "-c", str(cfg)]))
+    assert (s.include_description, s.chapters, s.timestamps) == (False, False, False)

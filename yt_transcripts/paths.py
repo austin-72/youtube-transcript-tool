@@ -10,7 +10,7 @@ FROZEN = bool(getattr(sys, "frozen", False))  # running as the PyInstaller .exe
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent.parent
 # files shipped inside the program (config.example.toml); the .exe unpacks them to a temporary folder
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
-RELEASES_URL = "https://github.com/austin-72/YouTubeTranscriptTool/releases/latest"
+RELEASES_URL = "https://github.com/austin-72/youtube-transcript-tool/releases/latest"
 
 
 def resource(name: str) -> Path:

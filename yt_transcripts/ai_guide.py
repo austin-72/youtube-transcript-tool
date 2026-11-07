@@ -37,6 +37,16 @@ def render(out: Path, s) -> str:
     when = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     by = {"keyword": "one folder per keyword (or channel)", "channel": "one folder per channel",
           "month": "one folder per upload month", "flat": "all in one folder"}.get(s.organize_by, s.organize_by)
+    ts = bool(getattr(s, "timestamps", False))
+    details = ", ".join(["title", "channel", "views", "published"]
+                        + (["description"] if getattr(s, "include_description", False) else []) + ["tags"]
+                        + (["chapters"] if getattr(s, "chapters", False) else []) + ["comments"])
+    md_line = ("readable, every paragraph starts with a `[mm:ss](https://www.youtube.com/watch?v=ID&t=Ns)`\n"
+               "    link to that moment - quote these links when citing." if ts else
+               "readable paragraphs with the video's details on top (no timestamps; the `.json` has\n"
+               "    each line's start time in seconds if a moment is needed).")
+    cite = ("Name the video (title + channel) and the timestamp link for every claim, so it can be checked."
+            if ts else "Name the video (title + channel) and its URL for every claim, so it can be checked.")
     return f"""{MARK}
 # YouTube transcripts - guide for AI assistants
 
@@ -51,9 +61,8 @@ Keywords: {kws}. Channels: {chans}.
 - `transcripts/` - one set of files per video, {by}. Formats: {fmts}.
   File names: `<upload date> - <channel> - <title> [<VIDEO_ID>]`.
   - `.json`: complete text and timed segments (`transcript.segments[].start/duration/text`, seconds),
-    plus video details (title, channel, views, published, description, tags, chapters, comments).
-  - `.md`: readable, every paragraph starts with a `[mm:ss](https://www.youtube.com/watch?v=ID&t=Ns)`
-    link to that moment - quote these links when citing.
+    plus video details ({details}).
+  - `.md`: {md_line}
   - `.txt`: plain text with a header (title, channel, URL, date, views).
 - `video_list.csv` / `.json` - the latest search: views, views per day, upload date, keyword,
   `keyword_mentions`, transcript file. `channel_list.*` - the latest channel download.
@@ -66,11 +75,27 @@ Keywords: {kws}. Channels: {chans}.
   only the matching videos. Whole transcripts are long (an hour of speech is ~9,000 words).
 - For recent news on a keyword, read the newest file in `combined/` for that keyword.
 - For numbers (views, dates, growth) use `video_list.csv` or the `lists/` files, not the transcripts.
-- Name the video (title + channel) and the timestamp link for every claim, so it can be checked.
+- {cite}
 - Auto-generated captions have no punctuation guarantees and mishear names - say so when a quote
   matters. Sponsor reads and subscribe reminders may already be cut (see "Skipped" in the file header).
 - A header line "Repeats: ..." marks a clip or re-upload of another video: don't count it twice.
 - These files are rewritten by the tool; put your own notes in a separate file.
+
+## Big jobs: distilling hundreds or thousands of videos
+Too much to read at once, so work in two passes and keep the results in files (the tool never touches
+`notes/` or `knowledge/`):
+1. Map - for each transcript without a note, write `notes/<same file name>.md`: the claims and
+   techniques taught, every concrete specific (numbers, settings, rules, tools, versions), who it's for,
+   warnings and mistakes, and a 1-5 rating of how specific and substantiated it is. Work in batches
+   (subagents help); skip videos that already have a note, so the work can be resumed.
+2. Reduce - from `notes/`, write `knowledge/<topic>.md` per topic: consensus (how many videos support
+   it), disagreements (both sides, with videos), the best explanation, specific numbers and settings,
+   common mistakes, open questions. Then `knowledge/index.md` as the one-page overview.
+3. Build from `knowledge/` what the user asks for (checklists, scripts, a Claude skill, a course...),
+   citing videos. When new transcripts arrive, add their notes and update `knowledge/`, listing what
+   changed at the top of `index.md`.
+Skip files marked "Repeats:" (clips of other videos). Treat claims as what YouTubers say, not facts:
+say how many videos support something, and flag health, legal and financial claims as such.
 """
 
 

@@ -31,6 +31,22 @@ from .proxies import ProxyPool, Slot
 log = logging.getLogger("yt_transcripts")
 
 ROTATING_RETRIES = 3  # rotating service blocked: reconnect (= new IP) and retry this many times first
+SWITCH_AUTO = 10  # with a long proxy list, move to the next proxy after this many videos
+SWITCH_AUTO_MIN_PROXIES = 8  # ...when the list has at least this many
+MAX_PROXIES_PER_VIDEO = 10  # a video blocked through this many proxies is given up for this run
+
+
+def switch_after(s, pool) -> int:
+    """Videos per proxy before a worker moves on (0 = stay until it's blocked). "auto": a list of 8+
+    proxies is worked through round-robin, 10 videos each - each IP stays far under YouTube's limits."""
+    v = str(getattr(s, "proxy_switch_after", "auto")).strip().lower()
+    if v != "auto":
+        try:
+            return max(0, int(float(v)))
+        except ValueError:
+            return 0
+    fixed = [x for x in pool.slots if x.url and not x.rotating]
+    return SWITCH_AUTO if len(fixed) >= SWITCH_AUTO_MIN_PROXIES else 0
 
 
 @dataclass(order=True)
@@ -118,6 +134,8 @@ class Engine:
         self.inline = True
         self.error: BaseException | None = None
         self._said_hourly = False
+        self.switch_after = switch_after(s, pool)
+        pool.per_hour = int(s.videos_per_hour_per_ip or 0)
 
     # -- stopping & waiting --------------------------------------------------------------------------
     def stopping(self) -> bool:
@@ -168,8 +186,14 @@ class Engine:
     # -- one worker --------------------------------------------------------------------------------------
     def _fetchers_for(self, slot: Slot) -> list:
         ws = copy.copy(self.s)  # own copy: workers must never see each other's proxy
-        ws.proxy = netmeter.route(slot.url)  # through the data meter's relay, which counts the bytes
+        ws.proxy = netmeter.route(slot.url, hold=True)  # through the data meter's relay, which counts the bytes
         return self.build_fetchers(ws, self.ydl_factory)
+
+    def _retire(self, fetchers, slot: Slot | None) -> None:
+        """Done with this slot's fetchers: close them, then give its relay back."""
+        self._close(fetchers)
+        if fetchers is not None and slot is not None and slot.url:
+            netmeter.drop(slot.url)
 
     @staticmethod
     def _close(fetchers) -> None:
@@ -185,6 +209,7 @@ class Engine:
         slot: Slot | None = None
         fetchers: list | None = None
         own_starts: collections.deque[float] = collections.deque()  # hourly budget for rotating services
+        held = 0  # videos done through the current slot
         prefer = next((x for x in self.pool.slots if x.url == prefer_url), None) if prefer_url else None
         try:
             while not self.stopping():
@@ -195,7 +220,7 @@ class Engine:
                     if slot is not None:
                         # nothing to do right now (other workers hold the last videos): hand the slot
                         # back, so a worker whose own slot is resting or dead can use it meanwhile
-                        self._close(fetchers)
+                        self._retire(fetchers, slot)
                         self.pool.release(slot)
                         slot, fetchers = None, None
                     job = self.jobs.get(self.stopping)
@@ -211,12 +236,20 @@ class Engine:
                         self.stop(self.pool.stopped or "interrupted")
                         break
                     fetchers = self._fetchers_for(slot)
+                    held = 0
                 sess = netmeter.active()
                 if slot.url and sess is not None and sess.limit_reached():
                     self.jobs.put_back(job)
                     self.stop("data_limit")
                     break
-                if not self._within_budget(slot, own_starts):
+                budget = self._within_budget(slot, own_starts)
+                if budget == "switch":  # this proxy's hourly budget is used up, another one is free
+                    self._retire(fetchers, slot)
+                    self.pool.release(slot)
+                    slot, fetchers = None, None
+                    self.jobs.put_back(job)
+                    continue
+                if not budget:
                     self.jobs.put_back(job)
                     break
                 fs = self.breaker.prune(fetchers)
@@ -230,7 +263,7 @@ class Engine:
                         job.fresh += 1  # a rotating service: a new connection is a new IP - just retry
                         log.info("    %s was blocked - reconnecting for a fresh IP (try %d of %d)",
                                  slot.label, job.fresh, ROTATING_RETRIES)
-                        self._close(fetchers)
+                        self._retire(fetchers, slot)
                         fetchers = self._fetchers_for(slot)
                         self.jobs.put_back(job)
                         continue
@@ -238,11 +271,11 @@ class Engine:
                     others = self.pool.usable_count() > 1
                     log.warning("    %s %s%s", "Could not connect through" if dead else "YouTube blocked",
                                 slot.label, " - switching" if others else "")
-                    self._close(fetchers)
+                    self._retire(fetchers, slot)
                     self.pool.release(slot)
                     used, slot, fetchers = slot, None, None
                     job.requeues += 1
-                    if job.requeues > len(self.pool.slots) + len(self.backoff) + 2:
+                    if job.requeues > min(len(self.pool.slots), MAX_PROXIES_PER_VIDEO) + len(self.backoff) + 2:
                         self._count(used)
                         self._emit(Result(job, None, status, msg, method))  # give this one up for now
                         self.jobs.done()
@@ -255,6 +288,13 @@ class Engine:
                 self._count(slot)
                 self._emit(Result(job, t, status, msg, method, slot.label if slot.url else ""))
                 self.jobs.done()
+                held += 1
+                if (self.switch_after and slot.url and not slot.rotating and held >= self.switch_after
+                        and self.pool.has_free(besides=slot)):
+                    # a long list: move on to the proxy that has rested longest, so no IP does too much
+                    self._retire(fetchers, slot)
+                    self.pool.release(slot)
+                    slot, fetchers = None, None
                 if self.jobs.remaining() > 0 and not self.stopping():
                     self._polite_gap()
         except BaseException as e:  # noqa: BLE001 - surfaced by run()
@@ -263,7 +303,7 @@ class Engine:
             self.error = e
             self.stop("error")
         finally:
-            self._close(fetchers)
+            self._retire(fetchers, slot)
             if slot is not None:
                 self.pool.release(slot)
 
@@ -274,13 +314,16 @@ class Engine:
         if slot is not None and slot.url and sess is not None:
             sess.count_video()
 
-    def _within_budget(self, slot: Slot, own_starts) -> bool:
+    def _within_budget(self, slot: Slot, own_starts) -> bool | str:
+        """True = go; "switch" = this proxy's hour is used up but another one is free; False = stopped."""
         per_hour = self.s.videos_per_hour_per_ip
         hist = own_starts if slot.rotating else slot.starts
         while True:
             w = self.pool.budget_wait_seconds(hist, per_hour)
             if w <= 0:
                 return True
+            if slot.url and not slot.rotating and self.pool.has_free(besides=slot):
+                return "switch"
             if not self._said_hourly:
                 self._said_hourly = True
                 log.info("    Hourly limit reached (%d videos per hour per IP, see videos_per_hour_per_ip) - "

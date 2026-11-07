@@ -213,17 +213,31 @@ def _unplayable_error(e) -> FetchError:
     return FetchError(ERROR, f"video is unplayable ({short}) - will try another method")
 
 
+LEVELS = ("max", "lean", "full")  # data-saver profiles, smallest first
+
+
 class _SaverHealth:
-    """Shared by every worker in a run: if the data saver misses captions that the full extraction then
-    finds, more than now and then, switch it off for the rest of the run (correct beats cheap)."""
+    """Shared by every worker in a run: if a data-saver profile misses captions that a fuller one then
+    finds, more than now and then, use the next fuller profile for the rest of the run (correct beats
+    cheap): max -> lean -> full."""
 
     def __init__(self) -> None:
         self.lock = __import__("threading").Lock()
         self.reset()
 
     def reset(self) -> None:
-        self.hits = self.misses = self.no_caption_checks = self.no_caption_seen = 0
-        self.disabled = False
+        self.hits = {lv: 0 for lv in LEVELS}
+        self.misses = {lv: 0 for lv in LEVELS}
+        self.no_caption_seen = 0
+        self.floor = "max"  # the leanest profile still trusted this run
+
+    @property
+    def disabled(self) -> bool:
+        return self.floor == "full"
+
+    def cap(self, profile: str) -> str:
+        """The profile to use: the wanted one, or a fuller one if the wanted one proved unreliable."""
+        return LEVELS[max(LEVELS.index(profile), LEVELS.index(self.floor))]
 
     def check_no_captions(self) -> bool:
         """Should a "no captions" answer from the data saver be double-checked with the full method?
@@ -232,33 +246,44 @@ class _SaverHealth:
             self.no_caption_seen += 1
             return self.no_caption_seen <= 3 or self.no_caption_seen % 10 == 0
 
-    def hit(self) -> None:
+    def hit(self, profile: str = "lean") -> None:
         with self.lock:
-            self.hits += 1
+            self.hits[profile] = self.hits.get(profile, 0) + 1
 
-    def miss(self) -> None:
+    def miss(self, profile: str = "lean") -> None:
         with self.lock:
-            self.misses += 1
-            if not self.disabled and self.misses >= 3 and self.misses * 10 > self.hits:
-                self.disabled = True
-                log.warning("    Data saver switched off for this run: it missed captions that the full method "
-                            "found (%d times). Set data_saver = \"off\" if this keeps happening.", self.misses)
+            self.misses[profile] = n = self.misses.get(profile, 0) + 1
+            if profile == "full" or LEVELS.index(self.floor) > LEVELS.index(profile):
+                return  # already moved past it
+            if n >= 3 and n * 10 > self.hits.get(profile, 0):
+                self.floor = LEVELS[LEVELS.index(profile) + 1]
+                if self.floor == "full":
+                    log.warning("    Data saver switched off for this run: it missed captions that the full "
+                                "method found (%d times). Set data_saver = \"off\" if this keeps happening.", n)
+                else:
+                    log.warning("    Data saver \"max\" missed captions %d times - using \"lean\" for the rest "
+                                "of this run (it also loads the watch page). Set data_saver = \"lean\" if this "
+                                "keeps happening.", n)
 
 
 SAVER_HEALTH = _SaverHealth()
 
 
 def saver_profile(s: Settings) -> str:
-    """Which data-saver profile a fetcher with these settings uses (see ytdlp_common.SAVER_ARGS)."""
+    """Which data-saver profile a fetcher with these settings uses (see ytdlp_common.SAVER_ARGS).
+    "auto" = the smallest ("max") through proxies, nothing to save on your own connection."""
     mode = str(getattr(s, "data_saver", "auto")).lower()
-    if mode == "off" or SAVER_HEALTH.disabled:
+    if mode == "off":
         return "full"
-    if mode == "max":
-        # without the watch page YouTube lists no translation languages: machine translation needs lean
-        return "lean" if s.translate else "max"
-    if mode == "on" or (mode == "auto" and s.proxy):
-        return "lean"
-    return "full"
+    if mode in ("on", "lean"):
+        want = "lean"
+    elif mode == "max" or (mode == "auto" and s.proxy):
+        want = "max"
+    else:
+        return "full"
+    if want == "max" and s.translate:
+        want = "lean"  # without the watch page YouTube lists no translation languages
+    return SAVER_HEALTH.cap(want)
 
 
 class YtDlpFetcher:
@@ -313,25 +338,32 @@ class YtDlpFetcher:
             return self._fetch(video, "full")
         try:
             t = self._fetch(video, profile)
-            SAVER_HEALTH.hit()
+            SAVER_HEALTH.hit(profile)
             return t
         except FetchError as e:
             if e.status in (BLOCKED, UNAVAILABLE):
-                raise  # the full method would get the same answer
+                raise  # a fuller profile would get the same answer
             if e.status == NO_TRANSCRIPT:
-                wrong_language = "no transcript in" in str(e)
-                if wrong_language and profile != "max":
-                    raise  # same tracks with the full method ("max" may lack some, so it does re-check)
-                if not wrong_language and not SAVER_HEALTH.check_no_captions():
+                if "no transcript in" in str(e):  # tracks exist, just not in the wanted languages
+                    if profile != "max":
+                        raise  # lean sees the same tracks as the full method
+                    check = "lean"  # max lists one client's tracks; lean adds the watch page's
+                elif SAVER_HEALTH.check_no_captions():
+                    check = "full"  # "no captions at all": ask the most complete method
+                else:
                     raise
+            else:  # an error a leaner profile may have caused (missing visitor data, empty track...)
+                check = "lean" if profile == "max" else "full"
             first = e
-            log.debug("    data saver found nothing (%s) - checking with the full method", e)
+            log.debug("    data saver %s found nothing (%s) - checking with %s", profile, e, check)
         try:
+            t = self._fetch(video, check)
+        except FetchError as e2:
+            if check == "full" or first.status == NO_TRANSCRIPT or e2.status in (BLOCKED, UNAVAILABLE, NO_TRANSCRIPT):
+                raise
             t = self._fetch(video, "full")
-        except FetchError:
-            raise
         if first.status in (NO_TRANSCRIPT, PO_TOKEN):
-            SAVER_HEALTH.miss()  # the saver missed captions the full method found
+            SAVER_HEALTH.miss(profile)  # the saver missed captions a fuller profile found
         return t
 
     def _fetch(self, video: Video, profile: str) -> Transcript:

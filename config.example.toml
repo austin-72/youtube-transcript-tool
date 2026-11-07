@@ -29,6 +29,7 @@ min_duration = 60          # seconds; skips very short clips
 max_duration = 0           # seconds; 0 = no maximum
 subtitles_only = false     # only videos with captions uploaded by the creator
 exact_dates = false        # look up the exact upload date of each match (slower)
+# feed_dates = true        # exact dates from each channel's small feed (one request per channel)
 # exclude_live = true      # skip streams that are live right now or upcoming (finished streams are kept)
 # sorts = ["popularity", "relevance"]   # advanced: which YouTube orderings are scanned
 
@@ -72,7 +73,9 @@ allow_other_languages = true  # if none of those exist, save the video's own lan
 translate = false           # ...or instead get YouTube's machine translation into your first language
 prefer_manual = true        # creator-uploaded captions before auto-generated ones
 formats = ["txt", "json"]   # any of: "txt", "md", "srt", "vtt", "json"
-txt_timestamps = false      # add [mm:ss] at the start of each paragraph in .txt files
+timestamps = false          # [mm:ss] per paragraph in .txt, and a link to that moment in .md files
+include_description = false # save each video's description with its transcript (no extra download)
+chapters = false            # chapter headings, when the creator added chapters
 strip_sound_tags = false    # remove [Music], [Applause], (laughs) and similar from the text
 # Cut sponsor reads, self-promotion and "like and subscribe" from the text (SponsorBlock database;
 # one tiny lookup per video over your own connection, never through proxies). [] turns it off.
@@ -137,6 +140,7 @@ proxy_limit_run_mb = 0      # per run (0 = no limit)
 proxy_limit_month_mb = 0    # per calendar month, across runs, e.g. 2000 for a 2 GB plan
 proxy_price_per_gb = 0      # e.g. 3.5 - shows what a run cost
 # proxy_meter = true        # false turns the counting off (and the limits with it)
-# Fewer bytes per video through proxies: "auto" (= on with proxies), "on", "off", or "max" (smallest;
-# exact upload dates and some chapters may be missing). If it ever misses captions, it switches itself off.
+# Fewer bytes per video through proxies: "auto" (= "max" with proxies: two small requests per video,
+# roughly 40-100 KB), "lean" (also loads the watch page, ~0.2-0.4 MB) or "off" (1-2 MB). If it ever
+# misses captions that a fuller method finds, it steps up for the rest of the run.
 data_saver = "auto"

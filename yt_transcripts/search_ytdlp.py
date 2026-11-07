@@ -170,9 +170,16 @@ def search_keyword(keyword: str, settings: Settings, ydl_factory: Callable | Non
 
 
 def enrich_exact(videos: list[Video], settings: Settings, ydl_factory: Callable | None = None) -> None:
-    """Replace approximate dates/views with exact values from each video page (slow)."""
+    """Replace approximate dates/views with exact values: from the channel feeds first (one small
+    request per channel), then from each remaining video's page (slow)."""
+    from .feeds import fill_dates
     from .utils import polite_sleep
     from .ytdlp_common import make_ydl
+
+    fill_dates(videos, settings, views=True)
+    videos = [v for v in videos if not v.published_exact or v.views is None]
+    if not videos:
+        return
 
     factory = ydl_factory or (lambda **kw: make_ydl(settings, **kw))
     with factory() as ydl:

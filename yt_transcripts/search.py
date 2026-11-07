@@ -272,7 +272,7 @@ def _keyword_with_retries(i, keywords, s: Settings, pool, prefer, backend, ydl_f
     log.info("[%d/%d] Keyword: %r%s", i + 1, len(keywords), kw, extra)
     tried = 0
     last_exc: Exception | None = None
-    while tried < len(pool.slots):
+    while tried < min(len(pool.slots), 10):  # a long list: try at most 10 proxies for one keyword
         slot = _lease_for_search(pool, prefer, should_stop)
         if slot is None:
             break

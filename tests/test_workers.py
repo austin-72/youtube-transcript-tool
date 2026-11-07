@@ -459,3 +459,98 @@ def test_search_on_own_connection_transcripts_through_proxies(monkeypatch):
     run_search(s)
     assert {p for p, _ in calls} == {""}
     assert s.proxy == "http://a:1"  # still the first proxy for the downloads
+
+
+# ---- long proxy lists (thousands of sticky-session endpoints) ----------------------------------------
+def test_sticky_sessions_are_not_treated_as_rotating():
+    assert proxies.looks_rotating("http://u:p@gate.decodo.com:7000")  # Decodo's rotating gateway
+    assert not proxies.looks_rotating("http://u:p@gate.decodo.com:10001")  # a sticky port
+    assert not proxies.looks_rotating("http://user-sp1-session-abc-sessionduration-10:p@gate.decodo.com:7000")
+    assert not proxies.looks_rotating("http://u:p@us.decodo.com:10001")
+    assert proxies.looks_rotating("http://name-rotate:p@p.webshare.io:80")
+    assert not proxies.looks_rotating("http://u:p@203.0.113.5:8080")
+
+
+def test_a_long_list_is_worked_through_round_robin_and_quickly():
+    import time
+
+    clock = [0.0]
+    urls = [f"http://u:p@gate.decodo.com:{10001 + i}" for i in range(10_000)]
+    pool = proxies.ProxyPool(urls, clock=lambda: clock[0])
+    t0 = time.perf_counter()
+    used = []
+    for _ in range(300):
+        clock[0] += 1
+        sl = pool.try_lease()
+        used.append(sl.url)
+        pool.release(sl)
+    assert time.perf_counter() - t0 < 5  # picking from 10,000 is linear, not quadratic
+    assert len(set(used)) == 300  # every lease a proxy that hasn't been used yet
+
+
+def test_full_hour_proxies_come_last_and_dont_count_as_free():
+    clock = [0.0]
+    pool = proxies.ProxyPool(["http://a:1", "http://b:2"], clock=lambda: clock[0])
+    pool.per_hour = 2
+    a = pool.try_lease()
+    a.starts.extend([0.0, 0.0])  # a has done its 2 videos this hour
+    pool.release(a)
+    b_hold = pool.try_lease()
+    assert b_hold.url == "http://b:2"
+    assert not pool.has_free(besides=b_hold)  # a is free but its hour is used up
+    clock[0] = 3601
+    assert pool.has_free(besides=b_hold)
+
+
+def test_switch_after_setting():
+    from yt_transcripts.workers import switch_after
+
+    s = build_settings({})
+    assert switch_after(s, proxies.ProxyPool([f"http://h{i}:1" for i in range(8)])) == 10
+    assert switch_after(s, proxies.ProxyPool(["http://a:1", "http://b:1"])) == 0  # a short list: stay
+    assert switch_after(s, proxies.ProxyPool(["http://u:p@gate.decodo.com:7000"] * 9)) == 0  # rotating
+    assert switch_after(build_settings({"proxy_switch_after": 3}), proxies.ProxyPool(["http://a:1"])) == 3
+    assert build_settings({"proxy_switch_after": "often"}).validate()
+
+
+def test_workers_move_through_a_long_list_and_give_relays_back(fake, tmp_path):
+    from yt_transcripts import netmeter
+
+    lst = tmp_path / "proxies.txt"
+    lst.write_text("\n".join(f"203.0.113.{i}:8080:user:pass" for i in range(1, 41)), encoding="utf-8")
+    s = fake(proxy_file=str(lst), proxy_switch_after=5, workers=2)
+    with netmeter.Session(s, "test") as sess:
+        stats = pipeline.download_all(_vids(30), s)
+        open_relays = len(sess.relays)
+    assert stats["ok"] == 30
+    by_proxy = {}
+    for px, _ in Fetcher.calls:
+        by_proxy[px] = by_proxy.get(px, 0) + 1
+    assert len(by_proxy) >= 6 and max(by_proxy.values()) <= 5  # 5 videos each, then the next proxy
+    assert open_relays <= 2  # relays of proxies no worker uses any more were closed
+
+
+def test_relays_close_when_given_back_unless_someone_else_uses_them(tmp_path):
+    from yt_transcripts import netmeter
+
+    s = build_settings({"output_dir": str(tmp_path), "proxy": "http://u:p@h:1"})
+    with netmeter.Session(s, "t") as sess:
+        netmeter.route("http://u:p@a:1", hold=True)
+        netmeter.route("http://u:p@a:1", hold=True)
+        netmeter.drop("http://u:p@a:1")
+        assert "http://u:p@a:1" in sess.relays  # still held once
+        netmeter.drop("http://u:p@a:1")
+        assert "http://u:p@a:1" not in sess.relays
+        netmeter.route("http://u:p@b:1")  # e.g. the feed lookups: kept for the run
+        netmeter.route("http://u:p@b:1", hold=True)
+        netmeter.drop("http://u:p@b:1")
+        assert "http://u:p@b:1" in sess.relays
+
+
+def test_usage_file_sums_up_a_huge_proxy_breakdown():
+    from yt_transcripts.netmeter import MAX_PROXIES_LISTED, _cap_breakdown
+
+    px = {f"203.0.113.{i}:{8000 + i}": i for i in range(1, 500)}
+    out = _cap_breakdown(px)
+    assert len(out) == MAX_PROXIES_LISTED and sum(out.values()) == sum(px.values())
+    assert "other proxies" in out

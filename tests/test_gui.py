@@ -192,13 +192,13 @@ def test_new_advanced_fields_round_trip(root, tmp_path):
 
     cfg = tmp_path / "config.toml"
     cfg.write_text('[network]\nproxy = "http://a:1"\nproxy_for_search = false\nproxy_limit_month_mb = 2000\n'
-                   'data_saver = "max"\n', encoding="utf-8")
+                   'data_saver = "lean"\n', encoding="utf-8")
     app = gui.App(root, cfg)
     v = app.collect()
     assert v["proxy_for_search"] is False and v["proxy_for_transcripts"] is True
-    assert v["proxy_limit_month_mb"] == 2000 and v["data_saver"] == "max"
+    assert v["proxy_limit_month_mb"] == 2000 and v["data_saver"] == "lean"
     summary = app.adv_summary.get()
-    assert "proxies for transcripts only" in summary and "proxy data limit" in summary and "data saver max" in summary
+    assert "proxies for transcripts only" in summary and "proxy data limit" in summary and "data saver lean" in summary
     app.vars["max_views"].set("50000")
     app.vars["remove_filler_words"].set(True)
     app._save()
@@ -235,3 +235,25 @@ def test_channels_dialog_starts_a_channel_run(root, tmp_path, monkeypatch):
     assert started["mode"] == "channel" and started["channels"][0] == "@somechannel"
     assert started["extra"]["channel_tabs"] == ["videos"] and started["extra"]["download_transcripts"] is True
     assert load_config(cfg)["channels"] == ["@somechannel", "https://www.youtube.com/playlist?list=PLabcdefghijkl"]
+
+
+def test_summary_mentions_a_proxy_list_file(tmp_path):
+    import tkinter as tk
+
+    from yt_transcripts import gui
+
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        import pytest
+        pytest.skip("no display")
+    root.withdraw()
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('proxy_file = "proxies.txt"\nproxy_for_search = false\n', encoding="utf-8")
+    try:
+        app = gui.App(root, cfg)
+        summary = app.adv_summary.get()
+        assert "proxy list proxies.txt" in summary and "proxies for transcripts only" in summary
+        assert app.vars["proxy"].get() == ""  # the list's entries never land in the single field
+    finally:
+        root.destroy()

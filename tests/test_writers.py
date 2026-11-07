@@ -214,3 +214,55 @@ def test_summary_shows_the_cut_off_actually_used(tmp_path):
     p = tmp_path / "x.md"
     p.write_text(writers.render_md(_video(), t), encoding="utf-8")
     assert transcript_preview(str(p)) == "# one - two"
+
+
+# ---- description / chapters / timestamps are optional -------------------------------------------------
+def _rich_video():
+    return Video(video_id="abcdefghijk", title="T", channel="C", published="2026-11-01", views=10,
+                 description="Links in my bio! 0:00 intro 1:00 main", tags=["x"],
+                 chapters=[{"start": 0.0, "end": 60.0, "title": "Intro"}, {"start": 60.0, "end": 120.0, "title": "Main"}])
+
+
+def _rich_transcript():
+    return Transcript("abcdefghijk", "en", "English", "auto", "ytdlp",
+                      [Segment(0, 30, "hello there."), Segment(61, 30, "the main part.")])
+
+
+def test_description_chapters_and_timestamps_are_left_out_unless_asked(tmp_path):
+    files = writers.write_transcript(_rich_video(), _rich_transcript(), tmp_path, ["txt", "md", "json"],
+                                     timestamps=False, description=False, chapters=False)
+    txt, md = files["txt"].read_text(encoding="utf-8"), files["md"].read_text(encoding="utf-8")
+    js = json.loads(files["json"].read_text(encoding="utf-8"))
+    for text in (txt, md):
+        assert "Links in my bio" not in text and "Intro" not in text and "Chapters:" not in text
+        assert "&t=" not in text and "[00:00]" not in text and "[00:01:01]" not in text
+        assert "hello there." in text and "the main part." in text
+    assert js["video"]["description"] == "" and js["video"]["chapters"] == []
+    assert js["transcript"]["segments"][1]["start"] == 61  # the timing itself is kept in the .json
+    files = writers.write_transcript(_rich_video(), _rich_transcript(), tmp_path / "on", ["txt", "md", "json"],
+                                     timestamps=True, description=True, chapters=True)
+    txt, md = files["txt"].read_text(encoding="utf-8"), files["md"].read_text(encoding="utf-8")
+    assert "Links in my bio" in txt and "== Main (01:00) ==" in txt and "[01:01] the main part." in txt
+    assert "Links in my bio" in md and "&t=61s" in md and "## Main" in md
+    assert json.loads(files["json"].read_text(encoding="utf-8"))["video"]["chapters"]
+
+
+def test_combined_file_and_list_follow_the_settings(tmp_path):
+    v, t = _rich_video(), _rich_transcript()
+    [path] = writers.write_combined([(v, t)], tmp_path, "2026-11-07_0100", timestamps=False, chapters=False)
+    text = path.read_text(encoding="utf-8")
+    assert "&t=" not in text and "Intro" not in text and "hello there." in text
+    paths = writers.write_video_list([v], tmp_path, description=False, chapters=False)
+    row = json.loads(paths["json"].read_text(encoding="utf-8"))[0]
+    assert row["description"] == "" and row["chapters"] == []
+    assert v.description and v.chapters  # the video itself is untouched (search filters still see it)
+
+
+def test_settings_defaults_and_the_old_timestamp_name():
+    from yt_transcripts.config import build_settings
+
+    s = build_settings({})
+    assert (s.timestamps, s.include_description, s.chapters) == (False, False, False)
+    assert build_settings({"txt_timestamps": True}).timestamps is True  # configs from before keep working
+    assert build_settings({"txt_timestamps": True, "timestamps": False}).timestamps is False
+    assert not build_settings({"txt_timestamps": True})._unknown_keys  # type: ignore[attr-defined]

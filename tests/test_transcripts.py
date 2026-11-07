@@ -400,9 +400,10 @@ def _saver_settings(**kw):
 def test_saver_profile_choice():
     tr.SAVER_HEALTH.reset()
     assert tr.saver_profile(_saver_settings()) == "full"  # own connection: nothing to save
-    assert tr.saver_profile(_saver_settings(proxy="http://127.0.0.1:9")) == "lean"
+    assert tr.saver_profile(_saver_settings(proxy="http://127.0.0.1:9")) == "max"  # the smallest via proxies
     assert tr.saver_profile(_saver_settings(proxy="http://x:1", data_saver="off")) == "full"
-    assert tr.saver_profile(_saver_settings(data_saver="on")) == "lean"
+    assert tr.saver_profile(_saver_settings(data_saver="on")) == "lean"  # old configs keep working
+    assert tr.saver_profile(_saver_settings(proxy="http://x:1", data_saver="lean")) == "lean"
     assert tr.saver_profile(_saver_settings(data_saver="max")) == "max"
 
 
@@ -426,7 +427,7 @@ def test_lean_downloads_the_small_caption_format_first():
     real = ydl.urlopen
     ydl.urlopen = lambda u: (asked.append(u), real(u))[1]
     profiles = []
-    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9"),
+    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9", data_saver="lean"),
                         ydl_factory=lambda profile="full": (profiles.append(profile), ydl)[1])
     t = f.fetch(Video(video_id="abcdefghijk"))
     assert profiles == ["lean"] and asked == ["u-srv1"]
@@ -443,7 +444,7 @@ def test_lean_miss_is_checked_with_the_full_method_and_switches_off():
     def factory(profile="full"):
         made.append(profile)
         return lean if profile == "lean" else full
-    s = _saver_settings(proxy="http://127.0.0.1:9")
+    s = _saver_settings(proxy="http://127.0.0.1:9", data_saver="lean")
     for _ in range(3):
         f = tr.YtDlpFetcher(s, ydl_factory=factory)
         assert f.fetch(Video(video_id="abcdefghijk")).segments
@@ -456,14 +457,14 @@ def test_lean_does_not_double_fetch_blocked_or_wrong_language():
     tr.SAVER_HEALTH.reset()
     made = []
     blocked = FakeYDL(exc=Exception("Sign in to confirm you're not a bot"))
-    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9"),
+    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9", data_saver="lean"),
                         ydl_factory=lambda profile="full": (made.append(profile), blocked)[1])
     with pytest.raises(tr.FetchError) as e:
         f.fetch(Video(video_id="abcdefghijk"))
     assert e.value.status == tr.BLOCKED and made == ["lean"]
     made.clear()
     fr = FakeYDL(_info(auto={"fr": [{"ext": "srv1", "url": "u"}]}), bodies={"u": SRV1})
-    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9", allow_other_languages=False),
+    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9", data_saver="lean", allow_other_languages=False),
                         ydl_factory=lambda profile="full": (made.append(profile), fr)[1])
     with pytest.raises(tr.FetchError) as e:
         f.fetch(Video(video_id="abcdefghijk"))
@@ -491,3 +492,47 @@ def test_no_captions_is_only_sampled_not_always_double_checked():
 def test_max_saver_uses_lean_when_translating():
     tr.SAVER_HEALTH.reset()
     assert tr.saver_profile(_saver_settings(data_saver="max", translate=True)) == "lean"
+
+
+def test_max_is_the_default_through_proxies_and_only_two_small_requests():
+    tr.SAVER_HEALTH.reset()
+    auto = {"en": [{"ext": "json3", "url": "u-json3"}, {"ext": "srv1", "url": "u-srv1"}]}
+    ydl = FakeYDL(_info(auto=auto), bodies={"u-srv1": SRV1})
+    made = []
+    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9"),
+                        ydl_factory=lambda profile="full": (made.append(profile), ydl)[1])
+    assert f.fetch(Video(video_id="abcdefghijk")).segments and made == ["max"]
+
+
+def test_max_miss_is_checked_with_lean_not_full_and_steps_down_one_level():
+    tr.SAVER_HEALTH.reset()
+    auto = {"en": [{"ext": "srv1", "url": "u"}]}
+    ydls = {"max": FakeYDL(_info(auto={"fr": [{"ext": "srv1", "url": "u"}]}), bodies={"u": SRV1}),
+            "lean": FakeYDL(_info(auto=auto), bodies={"u": SRV1}),
+            "full": FakeYDL(_info(auto=auto), bodies={"u": SRV1})}
+    made = []
+
+    def factory(profile="full"):
+        made.append(profile)
+        return ydls[profile]
+    s = _saver_settings(proxy="http://127.0.0.1:9", allow_other_languages=False)
+    for _ in range(3):  # max only saw French; lean (with the watch page) has English
+        assert tr.YtDlpFetcher(s, ydl_factory=factory).fetch(Video(video_id="abcdefghijk")).segments
+    assert made == ["max", "lean"] * 3 and "full" not in made
+    assert tr.saver_profile(s) == "lean" and not tr.SAVER_HEALTH.disabled  # one level down, not off
+    made.clear()
+    assert tr.YtDlpFetcher(s, ydl_factory=factory).fetch(Video(video_id="abcdefghijk")).segments
+    assert made == ["lean"]
+    tr.SAVER_HEALTH.reset()
+
+
+def test_max_error_tries_lean_then_full():
+    tr.SAVER_HEALTH.reset()
+    auto = {"en": [{"ext": "srv1", "url": "u"}]}
+    ydls = {"max": FakeYDL(exc=Exception("HTTP Error 500: odd")), "lean": FakeYDL(exc=Exception("HTTP Error 500")),
+            "full": FakeYDL(_info(auto=auto), bodies={"u": SRV1})}
+    made = []
+    f = tr.YtDlpFetcher(_saver_settings(proxy="http://127.0.0.1:9"),
+                        ydl_factory=lambda profile="full": (made.append(profile), ydls[profile])[1])
+    assert f.fetch(Video(video_id="abcdefghijk")).segments and made == ["max", "lean", "full"]
+    tr.SAVER_HEALTH.reset()

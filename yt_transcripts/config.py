@@ -51,6 +51,7 @@ class Settings:
     exclude_live: bool = True
     subtitles_only: bool = False  # YouTube's "Subtitles/CC" filter (uploaded captions only)
     exact_dates: bool = False  # look up exact upload date per video (slower, ytdlp backend)
+    feed_dates: bool = True  # exact dates from the channel's small feed instead of the video page
     title_must_contain: list[str] = field(default_factory=list)
     exclude_words: list[str] = field(default_factory=list)
     exclude_channels: list[str] = field(default_factory=list)
@@ -75,7 +76,9 @@ class Settings:
     # youtube-transcript-api is a lighter fallback (and costs 2 extra requests when it fails)
     transcript_methods: list[str] = field(default_factory=lambda: ["ytdlp", "api"])
     formats: list[str] = field(default_factory=lambda: ["txt", "json"])
-    txt_timestamps: bool = False
+    timestamps: bool = False  # [mm:ss] per paragraph in .txt, and links to that moment in .md / combined files
+    include_description: bool = False  # save the video's description with its transcript
+    chapters: bool = False  # chapter headings (when the creator added chapters)
     strip_sound_tags: bool = False  # remove [Music], [Applause], (laughs) ... from the text
     remove_filler_words: bool = False  # remove "um", "uh", "erm", "hmm" from the text
     min_transcript_words: int = 0  # don't save transcripts shorter than this (music videos, intros); 0 = keep all
@@ -110,6 +113,9 @@ class Settings:
     # parallel downloads: "auto" = one worker per proxy (one in total without proxies)
     workers: str | int = "auto"
     workers_per_proxy: int = 1  # >1 only makes sense for rotating proxy services (a new IP per connection)
+    # videos per proxy before a worker moves to the next one; "auto" = 10 with a list of 8+ proxies
+    # (each IP does only a few videos), otherwise stay until YouTube blocks it. 0 = always stay.
+    proxy_switch_after: str | int = "auto"
     proxy_rotating: str | bool = "auto"  # "auto" recognises e.g. Webshare's "-rotate" users and known gateways
     # yt-dlp --extractor-args, for fixes from the yt-dlp wiki/issues, e.g. ["youtube:player_client=default,-web"]
     ytdlp_extractor_args: list[str] = field(default_factory=list)
@@ -122,7 +128,7 @@ class Settings:
     proxy_limit_run_mb: float = 0.0  # stop starting new videos after this much proxy data in one run (0 = none)
     proxy_limit_month_mb: float = 0.0  # ...or after this much in a calendar month, across runs (0 = none)
     proxy_price_per_gb: float = 0.0  # your plan's price, to show costs (0 = don't show)
-    # fewer bytes per video: "auto" = on for downloads through proxies, "on", "off", or "max"
+    # fewer bytes per video through proxies: "auto" (= "max" with proxies), "max", "lean" ("on"), "off"
     data_saver: str = "auto"
     js_runtimes: list[str] = field(default_factory=lambda: ["deno", "node"])
 
@@ -238,6 +244,9 @@ class Settings:
             problems.append(f'workers must be "auto" or a number from 1 to 16 (got {self.workers!r}).')
         if not 1 <= int(self.workers_per_proxy or 0) <= 10:
             problems.append("workers_per_proxy must be between 1 and 10.")
+        sw = str(self.proxy_switch_after).strip().lower()
+        if sw != "auto" and not sw.isdigit():
+            problems.append(f'proxy_switch_after must be "auto" or a number (got {self.proxy_switch_after!r}).')
         if str(self.proxy_rotating).lower() not in ("auto", "true", "false"):
             problems.append('proxy_rotating must be "auto", true or false.')
         from .ytdlp_common import parse_extractor_args
@@ -285,8 +294,8 @@ class Settings:
                             + (f" (unknown: {', '.join(sorted(unknown))})" if unknown else "") + ".")
         if self.combine_max_words < 0:
             problems.append("combine_max_words cannot be negative (0 = never split the combined files).")
-        if str(self.data_saver).lower() not in ("auto", "on", "off", "max"):
-            problems.append('data_saver must be "auto", "on", "off" or "max".')
+        if str(self.data_saver).lower() not in ("auto", "max", "lean", "on", "off"):
+            problems.append('data_saver must be "auto", "max", "lean" or "off".')
         if min(self.proxy_limit_run_mb, self.proxy_limit_month_mb, self.proxy_price_per_gb) < 0:
             problems.append("proxy_limit_run_mb, proxy_limit_month_mb and proxy_price_per_gb cannot be negative.")
         if self.videos_per_hour_per_ip < 0:
@@ -436,6 +445,10 @@ def build_settings(config: dict[str, Any] | None = None, overrides: dict[str, An
         for k, v in source.items():
             if v is None:
                 continue
+            if k == "txt_timestamps":  # the old name (it only covered .txt files)
+                if "timestamps" in source:
+                    continue
+                k = "timestamps"
             if k not in known:
                 unknown.append(k)
                 continue

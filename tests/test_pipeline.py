@@ -496,17 +496,39 @@ def test_list_keeps_links_when_a_later_run_stops_early(settings, monkeypatch):
 
 def test_changing_text_settings_rebuilds_files_without_refetching(settings, monkeypatch):
     settings.formats = ["txt", "json"]
-    settings.txt_timestamps = False
+    settings.timestamps = False
     _install(monkeypatch, ScriptedFetcher("api", {v.video_id: [_t(v.video_id)] for v in _videos()}))
     pipeline.download_all(_videos()[:1], settings, sleep=lambda s: None)
     out = pipeline.Path(settings.output_dir)
     rec = json.loads((out / "manifest.json").read_text(encoding="utf-8"))["aaaaaaaaaaa"]
     txt = out / rec["files"]["txt"]
     assert "[00:00]" not in txt.read_text(encoding="utf-8")
-    settings.txt_timestamps = True
+    settings.timestamps = True
     f = ScriptedFetcher("api", {})
     _install(monkeypatch, f)
     pipeline.download_all(_videos()[:1], settings, sleep=lambda s: None)
     assert f.calls == [] and "[00:00]" in txt.read_text(encoding="utf-8")
     pipeline.download_all(_videos()[:1], settings, sleep=lambda s: None)  # now in sync: plain skip
     assert f.calls == []
+
+
+def test_switching_the_description_off_cleans_saved_files_without_refetching(settings, monkeypatch):
+    settings.formats = ["txt", "json"]
+    settings.include_description = True
+    vids = _videos()[:1]
+    vids[0].description = "Use my promo code SAVE10"
+    _install(monkeypatch, ScriptedFetcher("api", {v.video_id: [_t(v.video_id)] for v in vids}))
+    pipeline.download_all(vids, settings, sleep=lambda s: None)
+    out = pipeline.Path(settings.output_dir)
+    rec = json.loads((out / "manifest.json").read_text(encoding="utf-8"))["aaaaaaaaaaa"]
+    txt, js = out / rec["files"]["txt"], out / rec["files"]["json"]
+    assert "SAVE10" in txt.read_text(encoding="utf-8") and "SAVE10" in js.read_text(encoding="utf-8")
+    settings.include_description = False
+    f = ScriptedFetcher("api", {})
+    _install(monkeypatch, f)
+    again = _videos()[:1]
+    again[0].description = "Use my promo code SAVE10"  # the search still sees it
+    pipeline.download_all(again, settings, sleep=lambda s: None)
+    assert f.calls == []
+    assert "SAVE10" not in txt.read_text(encoding="utf-8") and "SAVE10" not in js.read_text(encoding="utf-8")
+    assert "Sentence number 11." in txt.read_text(encoding="utf-8")

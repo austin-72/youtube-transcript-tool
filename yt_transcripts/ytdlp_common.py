@@ -83,8 +83,9 @@ def parse_extractor_args(spec: str) -> tuple[str, dict[str, list[str]]]:
 # Data-saver profiles for fetching captions (the formats/streams themselves are never needed):
 #   lean - only the "visionos" player client: it needs no player JavaScript (no ~1 MB player download,
 #          no Deno run) and no PO token for captions, and it's one API request instead of three.
-#   max  - lean, and also skip the watch page and the "next" data (the biggest downloads). Exact upload
-#          dates and chapters may be missing then (chapters written in the description still work).
+#   max  - lean, and also skip the watch page and the "next" data (the biggest downloads): two small
+#          requests per video. Exact upload dates then come from the channel feed (feeds.py); chapters
+#          written in the description still work, YouTube's automatic chapters are missing.
 SAVER_ARGS = {
     "full": {},
     "lean": {"player_client": ["visionos"]},

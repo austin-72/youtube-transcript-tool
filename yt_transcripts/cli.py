@@ -54,8 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="search over your own connection (proxies only for the transcripts)")
     common.add_argument("--transcripts-direct", dest="proxy_for_transcripts", action="store_false", default=None,
                         help="download transcripts over your own connection")
-    common.add_argument("--data-saver", choices=["auto", "on", "off", "max"],
-                        help="fewer bytes per video through proxies (default auto = on with proxies)")
+    common.add_argument("--data-saver", choices=["auto", "max", "lean", "on", "off"],
+                        help="fewer bytes per video through proxies (default auto = max with proxies)")
     common.add_argument("--data-limit", dest="proxy_limit_run_mb", type=float, metavar="MB",
                         help="stop starting new videos after this much proxy data in this run")
     common.add_argument("--month-limit", dest="proxy_limit_month_mb", type=float, metavar="MB",
@@ -92,7 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["txt", "md", "srt", "vtt", "json"], help="output format (repeatable, default txt + json)")
     t.add_argument("--organize-by", choices=["keyword", "channel", "month", "flat"], help="folder layout for transcripts")
     t.add_argument("--methods", dest="transcript_methods", help="comma list, e.g. ytdlp or api,ytdlp")
-    _bool_flag(t, "timestamps", "put [mm:ss] timestamps in the .txt files")
+    _bool_flag(t, "timestamps", "[mm:ss] timestamps in the .txt files, links to each moment in the .md files")
+    _bool_flag(t, "description", "save each video's description with its transcript")
+    _bool_flag(t, "chapters", "chapter headings in the transcripts (when the creator added chapters)")
     _bool_flag(t, "allow-other-languages", "fall back to the video's own language if the preferred one is missing")
     _bool_flag(t, "translate", "if your language is missing, use YouTube's machine translation into it")
     _bool_flag(t, "retry-failed", "retry videos that previously had no transcript / were unavailable")
@@ -165,8 +167,8 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         ov["channel_tabs"] = [t.strip().lower() for t in ov["channel_tabs"].split(",") if t.strip()]
     if "open" in ov:
         ov["open_list_when_done"] = ov.pop("open")
-    if "timestamps" in ov:
-        ov["txt_timestamps"] = ov.pop("timestamps")
+    if "description" in ov:
+        ov["include_description"] = ov.pop("description")
     if isinstance(ov.get("transcript_methods"), str):
         ov["transcript_methods"] = [m.strip() for m in ov["transcript_methods"].split(",") if m.strip()]
     kws = list(getattr(args, "keyword_list", None) or [])
@@ -323,8 +325,8 @@ def _cmd_search(s: Settings, save: bool = True, should_stop=None, channels: list
         from .report import search_summary
 
         summary = search_summary(s, channels)
-        write_video_list(videos, out / "lists", f"{stamp}_{stem}", summary)
-        paths = write_video_list(videos, out, stem, summary)
+        write_video_list(videos, out / "lists", f"{stamp}_{stem}", summary, description=s.include_description, chapters=s.chapters)
+        paths = write_video_list(videos, out, stem, summary, description=s.include_description, chapters=s.chapters)
         global LAST_LIST_HTML
         LAST_LIST_HTML = paths["html"]
         _library(s, out)
@@ -537,7 +539,7 @@ def _cmd_run(s: Settings, transcripts_only_list: str | None = None, should_stop=
     out = Path(s.output_dir)
     # update the lists with transcript status / file paths
     if transcripts_only_list:
-        write_video_list(videos, out / "lists", f"{stamp}_transcripts_list")
+        write_video_list(videos, out / "lists", f"{stamp}_transcripts_list", description=s.include_description, chapters=s.chapters)
     else:
         from .report import search_summary
         from .search import sort_for_list
@@ -545,8 +547,8 @@ def _cmd_run(s: Settings, transcripts_only_list: str | None = None, should_stop=
         videos = sort_for_list(videos, s.list_sort)  # exact dates learned while fetching may change the order
         summary = search_summary(s, channels)
         stem = "channel_list" if channels else "video_list"
-        write_video_list(videos, out / "lists", f"{stamp}_{stem}", summary)
-        html = write_video_list(videos, out, stem, summary)["html"]
+        write_video_list(videos, out / "lists", f"{stamp}_{stem}", summary, description=s.include_description, chapters=s.chapters)
+        html = write_video_list(videos, out, stem, summary, description=s.include_description, chapters=s.chapters)["html"]
     lib = _library(s, out)
     summary = summarize_stats(stats)
     log.info("Done: %s", summary or "nothing to do")
@@ -631,6 +633,24 @@ def cmd_find(s: Settings, phrase: str, max_hits: int = 200, out=None) -> int:
     return 0
 
 
+def _export_text(t: dict, s: Settings) -> tuple[str, list[dict]]:
+    """The transcript as the readable files have it: SponsorBlock parts cut, sound tags and filler words
+    removed if those are switched on (the .json itself keeps the original)."""
+    from .models import Segment, Transcript
+    from .pipeline import _clean_text
+
+    try:
+        segs = [Segment(float(x["start"]), float(x.get("duration") or 0), str(x["text"]))
+                for x in t.get("segments") or []]
+    except (KeyError, TypeError, ValueError):
+        return str(t.get("text", "")), list(t.get("segments") or [])
+    tt = Transcript("", "", "", "", "", segs)
+    tt.skipped = [x for x in t.get("skipped") or [] if isinstance(x, dict)]
+    clean = _clean_text(tt, s)
+    return clean.text, [{"start": round(x.start, 3), "duration": round(x.duration, 3), "text": x.text}
+                        for x in clean.segments]
+
+
 def cmd_export(s: Settings) -> int:
     """One JSON object per line (metadata + full text + segments) and a CSV with one row per video."""
     import csv
@@ -660,9 +680,10 @@ def cmd_export(s: Settings) -> int:
             except (ValueError, OSError):
                 continue
             v, t = data.get("video", {}), data.get("transcript", {})
+            text, segments = _export_text(t, s)
             row = {**{k: v.get(k, "") for k in cols}, "language": t.get("language", ""), "kind": t.get("kind", ""),
-                   "text": t.get("text", ""), "words": len(t.get("text", "").split())}
-            jf.write(json.dumps({**row, "segments": t.get("segments", [])}, ensure_ascii=False) + "\n")
+                   "text": text, "words": len(text.split())}
+            jf.write(json.dumps({**row, "segments": segments}, ensure_ascii=False) + "\n")
             w.writerow(row)
             n += 1
     csv_path.write_text(buf.getvalue(), encoding="utf-8-sig")

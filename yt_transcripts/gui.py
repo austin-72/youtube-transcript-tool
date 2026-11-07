@@ -126,8 +126,14 @@ class App:
             V[f"fmt_{f}"] = tk.BooleanVar(value=f in s.formats)
             ttk.Checkbutton(fmt_frame, text=f".{f}", variable=V[f"fmt_{f}"]).pack(side="left", padx=(0, 6))
         self._row(tf, r, "Save as", fmt_frame); r += 1
-        V["txt_timestamps"] = tk.BooleanVar(value=s.txt_timestamps)
-        ttk.Checkbutton(tf, text="Timestamps in .txt files", variable=V["txt_timestamps"]).grid(row=r, column=1, sticky="w"); r += 1
+        V["timestamps"] = tk.BooleanVar(value=s.timestamps)
+        ttk.Checkbutton(tf, text="Timestamps ([mm:ss] in .txt, links in .md)", variable=V["timestamps"]).grid(
+            row=r, column=1, sticky="w"); r += 1
+        V["include_description"] = tk.BooleanVar(value=s.include_description)
+        ttk.Checkbutton(tf, text="Video description", variable=V["include_description"]).grid(
+            row=r, column=1, sticky="w"); r += 1
+        V["chapters"] = tk.BooleanVar(value=s.chapters)
+        ttk.Checkbutton(tf, text="Chapter headings", variable=V["chapters"]).grid(row=r, column=1, sticky="w"); r += 1
         self._sb_cats = list(s.sponsorblock) or ["sponsor", "selfpromo", "interaction"]
         V["sponsorblock_on"] = tk.BooleanVar(value=bool(s.sponsorblock))
         ttk.Checkbutton(tf, text="Cut sponsor reads & subscribe reminders (SponsorBlock)",
@@ -176,7 +182,7 @@ class App:
                   foreground="gray").grid(row=r, column=1, sticky="w"); r += 1
         V["data_saver"] = tk.StringVar(value=str(s.data_saver))
         self._row(af, r, "Data saver (proxies)", ttk.Combobox(af, textvariable=V["data_saver"], state="readonly",
-                                                             values=["auto", "on", "max", "off"], width=6)); r += 1
+                                                             values=["auto", "max", "lean", "off"], width=6)); r += 1
         V["proxy_limit_run_mb"] = tk.StringVar(value=f"{s.proxy_limit_run_mb:g}")
         self._row(af, r, "Proxy data limit per run (MB)",
                   ttk.Entry(af, textvariable=V["proxy_limit_run_mb"], width=8)); r += 1
@@ -190,6 +196,7 @@ class App:
         V["proxy"] = tk.StringVar(value=" ".join([s.proxy] + [str(x) for x in s.proxies]).strip())
         self._row(af, r, "Proxy (optional)", ttk.Entry(af, textvariable=V["proxy"], width=40), col=2); r += 1
         hint = "e.g. http://user:pass@host:port - several separated by spaces are rotated"
+        self._proxy_file = s.proxy_file
         if s.proxy_file:
             hint += f"\nplus the proxies listed in {s.proxy_file} (config.toml)"
         ttk.Label(af, text=hint, foreground="gray").grid(row=r, column=3, sticky="w"); r += 1
@@ -289,6 +296,9 @@ class App:
         proxies = V["proxy"].get().split()
         if proxies:
             bits.append(f"{len(proxies)} prox{'y' if len(proxies) == 1 else 'ies'}")
+        if getattr(self, "_proxy_file", ""):
+            bits.append(f"proxy list {Path(self._proxy_file).name}")
+            proxies = proxies or [self._proxy_file]  # the rest of the summary applies to the list too
         if V["workers"].get() not in ("auto", "1", ""):
             bits.append(f"{V['workers'].get()} parallel downloads")
         if V["cookies_from_browser"].get().strip():
@@ -303,7 +313,7 @@ class App:
                if x not in ("", "0")]
         if proxies and lim:
             bits.append("proxy data limit")
-        if proxies and V["data_saver"].get() in ("off", "max"):
+        if proxies and V["data_saver"].get() in ("off", "lean", "on"):
             bits.append(f"data saver {V['data_saver'].get()}")
         self.adv_summary.set(("In use: " + ", ".join(bits)) if bits else
                              "proxies, parallel downloads, cookies, API key, pause between videos")
@@ -474,7 +484,9 @@ class App:
             "allow_other_languages": missing in ("original", "translate"),
             "translate": missing == "translate",
             "formats": formats,
-            "txt_timestamps": bool(V["txt_timestamps"].get()),
+            "timestamps": bool(V["timestamps"].get()),
+            "include_description": bool(V["include_description"].get()),
+            "chapters": bool(V["chapters"].get()),
             "combine": bool(V["combine"].get()),
             "organize_by": V["organize_by"].get(),
             "output_dir": V["output_dir"].get().strip() or "output",

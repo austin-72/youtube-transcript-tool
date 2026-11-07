@@ -357,3 +357,16 @@ def test_second_run_does_not_wipe_a_busy_runs_log(tmp_path):
         assert (out / "last_run.log").read_text(encoding="utf-8") == "the scheduled run is busy"
     finally:
         busy.release()
+
+
+def test_export_cuts_sponsor_reads_like_the_readable_files(tmp_path):
+    from yt_transcripts.config import build_settings
+
+    t = {"text": "hi buy my thing bye", "skipped": [{"start": 10.0, "end": 20.0, "category": "sponsor"}],
+         "segments": [{"start": 0, "duration": 5, "text": "hi"}, {"start": 11, "duration": 5, "text": "buy my thing"},
+                      {"start": 25, "duration": 5, "text": "bye"}]}
+    text, segs = cli._export_text(t, build_settings({}))
+    assert text == "hi bye" and [x["text"] for x in segs] == ["hi", "bye"]
+    text, _ = cli._export_text(t, build_settings({"sponsorblock": []}))
+    assert "buy my thing" in text
+    assert cli._export_text({"text": "x", "segments": [{"bad": 1}]}, build_settings({}))[0] == "x"

@@ -501,13 +501,22 @@ def active() -> "Session | None":
     return _active
 
 
-def route(proxy_url: str) -> str:
+def route(proxy_url: str, hold: bool = False) -> str:
     """The URL the downloaders should use for this proxy: its counting relay while a session is
-    running, otherwise the proxy itself. "" (direct connection) stays ""."""
+    running, otherwise the proxy itself. "" (direct connection) stays "".
+    hold=True: the caller gives it back with drop() when done, so the relay can close (big proxy lists
+    would otherwise leave thousands of idle relays open)."""
     sess = _active
     if not proxy_url or sess is None or not sess.enabled:
         return proxy_url
-    return sess.relay_url(proxy_url)
+    return sess.relay_url(proxy_url, hold=hold)
+
+
+def drop(proxy_url: str) -> None:
+    """Give back a relay taken with route(..., hold=True)."""
+    sess = _active
+    if proxy_url and sess is not None and sess.enabled:
+        sess.drop(proxy_url)
 
 
 class Session:
@@ -541,6 +550,8 @@ class Session:
         self.meter = Meter(min(limits) if limits else 0)
         self.meter.exhausted = bool(limits) and min(limits) == 0  # nothing left: refuse at once
         self.relays: dict[str, Relay] = {}
+        self._holds: dict[str, int] = {}  # relays in use by downloads (closed when given back)
+        self._pinned: set[str] = set()  # relays others use without giving them back: kept to the end
         self.closed = False
         self.videos = 0
         self.download_base: int | None = None  # bytes counted before downloads started (search etc.)
@@ -577,7 +588,7 @@ class Session:
         self.save()
 
     # -- routing --
-    def relay_url(self, proxy_url: str) -> str:
+    def relay_url(self, proxy_url: str, hold: bool = False) -> str:
         with self._lock:
             if self.closed:
                 return proxy_url  # the run is over (a straggler): go direct to the proxy, uncounted
@@ -585,7 +596,25 @@ class Session:
             if r is None:
                 r = self.relays[proxy_url] = Relay(proxy_url, self.meter)
                 self._ever_relayed = True
+            if hold:
+                self._holds[proxy_url] = self._holds.get(proxy_url, 0) + 1
+            else:
+                self._pinned.add(proxy_url)
             return r.url
+
+    def drop(self, proxy_url: str) -> None:
+        """A download is done with this proxy: close its relay unless something else still uses it."""
+        with self._lock:
+            n = self._holds.get(proxy_url, 0) - 1
+            if n > 0:
+                self._holds[proxy_url] = n
+                return
+            self._holds.pop(proxy_url, None)
+            if proxy_url in self._pinned or self.closed:
+                return
+            r = self.relays.pop(proxy_url, None)
+        if r is not None:
+            r.close()
 
     @property
     def used_proxies(self) -> bool:
@@ -660,6 +689,7 @@ class Session:
                     px = m.setdefault("proxies", {})
                     for k, v in d_by.items():
                         px[k] = int(px.get(k, 0)) + v
+                    m["proxies"] = _cap_breakdown(px)
                     runs = data["runs"]
                     stamp = self.started.isoformat(timespec="seconds")
                     entry = next((r for r in reversed(runs) if r.get("started") == stamp), None)
@@ -674,6 +704,20 @@ class Session:
                 log.debug("could not save %s: %s", USAGE_FILE, e)
                 return
             self._saved_bytes, self._saved_videos, self._saved_by = total, videos, by
+
+
+MAX_PROXIES_LISTED = 100  # per month in the usage file; a list of 10,000 proxies is summed up beyond that
+
+
+def _cap_breakdown(px: dict) -> dict:
+    """The per-proxy breakdown, with the smallest entries added up as "other proxies" past the cap."""
+    if len(px) <= MAX_PROXIES_LISTED:
+        return px
+    other = "other proxies"
+    items = sorted(((k, int(v)) for k, v in px.items() if k != other), key=lambda kv: -kv[1])
+    keep = dict(items[: MAX_PROXIES_LISTED - 1])
+    keep[other] = int(px.get(other, 0)) + sum(v for _, v in items[MAX_PROXIES_LISTED - 1:])
+    return keep
 
 
 def usage_report(out_dir: Path, s=None, months: int = 6) -> list[str]:
